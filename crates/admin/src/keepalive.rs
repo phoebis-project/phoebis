@@ -10,7 +10,7 @@ use axum::Json;
 use phoebis_attention::{KeepaliveCap, KeepaliveFacts, KeepaliveStanding};
 use phoebis_ledger::{read_overview_rollups, trailing_day_hours, UNATTRIBUTED};
 use phoebis_session_engine::{
-    Engine, IdleReturns, KeepaliveLimits, SessionCounts, WarmingCounts, Wasted,
+    Engine, IdleReturns, KeepaliveLimits, SessionCaps, SessionCounts, WarmingCounts, Wasted,
     IDLE_AGE_BOUNDS_SECONDS,
 };
 use utoipa::ToSchema;
@@ -35,7 +35,8 @@ pub(crate) struct KeepaliveOverview {
     pub last_bus_gap_at: Option<i64>,
     /// `agents`, `retained_bytes` and `sessions`, each a `count` of what its cap bounds, where a session holds a slot
     /// from its first request until its end, and an agent's record from that request until it leaves, beside the
-    /// `max` the bootstrap file's `keepalive` block sets.
+    /// `max` that the bootstrap file sets, the two session caps in its `sessions` block and the byte cap in its
+    /// `keepalive` block.
     pub limits: OverviewLimits,
     pub pools: Vec<PoolKeepalive>,
     /// `ok`, `plan_ok`, `failed`, `held`, `skipped`, where `plan_ok` counts the plan-funded probes of `ok` and `held`
@@ -100,7 +101,7 @@ pub struct EngineFacts {
 impl KeepaliveFacts for EngineFacts {
     fn standing(&self) -> KeepaliveStanding {
         let stats = self.engine.stats();
-        let [sessions, agents] = session_caps_of(&stats.sessions, self.engine.limits());
+        let [sessions, agents] = session_caps_of(&stats.sessions, self.engine.session_caps());
         let retained = byte_cap_of(&stats.warming, self.engine.limits());
         KeepaliveStanding {
             bus_gaps: stats.warming.bus_gaps,
@@ -113,17 +114,17 @@ impl KeepaliveFacts for EngineFacts {
 
 /// The two session caps, `sessions` and then `agents`, which the overview's `limits` and the reader's standing both
 /// read, so the two never count a cap differently.
-fn session_caps_of(counts: &SessionCounts, limits: &KeepaliveLimits) -> [KeepaliveCap; 2] {
+fn session_caps_of(counts: &SessionCounts, caps: &SessionCaps) -> [KeepaliveCap; 2] {
     [
         KeepaliveCap {
             name: "sessions",
             count: counts.live,
-            max: limits.max_sessions,
+            max: caps.max_sessions,
         },
         KeepaliveCap {
             name: "agents",
             count: counts.agents,
-            max: limits.max_agents,
+            max: caps.max_agents,
         },
     ]
 }
@@ -276,7 +277,8 @@ pub(crate) async fn overview(
         count: c.count,
         max: c.max,
     };
-    let [sessions, agents] = session_caps_of(&stats.sessions, state.engine.limits()).map(limit);
+    let [sessions, agents] =
+        session_caps_of(&stats.sessions, state.engine.session_caps()).map(limit);
     let retained = limit(byte_cap_of(&stats.warming, state.engine.limits()));
     Json(KeepaliveOverview {
         agents: state.engine.agent_counts(),

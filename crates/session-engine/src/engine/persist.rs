@@ -21,7 +21,6 @@ use phoebis_store::{
 };
 use serde::Deserialize;
 
-use crate::engine::config::KeepaliveLimits;
 use crate::engine::{Engine, Inner};
 use crate::sessions::facts::{
     AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts, StoredSessionFacts,
@@ -471,12 +470,10 @@ impl Inner {
         }: EngineState,
         now: i64,
     ) {
-        let (limits, timing) = (
-            KeepaliveLimits {
-                max_agents: self.sessions.max_agents,
-                max_retained_bytes: self.warming.max_retained_bytes,
-                max_sessions: self.sessions.max_sessions,
-            },
+        let (max_agents, max_sessions, max_retained_bytes, timing) = (
+            self.sessions.max_agents,
+            self.sessions.max_sessions,
+            self.warming.max_retained_bytes,
             self.warming.timing,
         );
         self.warming.restore_counters(counters);
@@ -592,9 +589,9 @@ impl Inner {
             let holds_slot = session.holds_slot();
             let over = if !holds_slot {
                 None
-            } else if live_sessions >= limits.max_sessions {
+            } else if live_sessions >= max_sessions {
                 Some(&mut by_sessions)
-            } else if agent_count >= limits.max_agents {
+            } else if agent_count >= max_agents {
                 Some(&mut by_agents)
             } else {
                 None
@@ -634,7 +631,7 @@ impl Inner {
                 // Read off the row rather than the opened body, so a blob that no longer opens is cleared by the
                 // agent's next save.
                 warming.body_saved = warming_row.body_size > 0;
-                if holds_slot && agent_count >= limits.max_agents {
+                if holds_slot && agent_count >= max_agents {
                     self.warming
                         .dispose_loaded(&key, &warming_row, Some(warming), &mut by_agents);
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
@@ -707,7 +704,7 @@ impl Inner {
                 );
                 continue;
             }
-            if self.warming.retained > limits.max_retained_bytes {
+            if self.warming.retained > max_retained_bytes {
                 by_bytes += 1;
                 self.discard_at_load(&key, &agent_id, Reason::Evicted, Some(Wasted::Evicted));
             }
@@ -723,7 +720,7 @@ impl Inner {
                 sessions = by_sessions.sessions,
                 agents = by_sessions.agents,
                 recipes = by_sessions.recipes,
-                max_sessions = limits.max_sessions,
+                max_sessions,
                 "keepalive sessions past max_sessions were not restored"
             );
         }
@@ -732,14 +729,14 @@ impl Inner {
                 sessions = by_agents.sessions,
                 agents = by_agents.agents,
                 recipes = by_agents.recipes,
-                max_agents = limits.max_agents,
+                max_agents,
                 "keepalive agents past max_agents were not restored"
             );
         }
         if by_bytes > 0 {
             tracing::info!(
                 recipes = by_bytes,
-                max_retained_bytes = limits.max_retained_bytes,
+                max_retained_bytes,
                 "keepalive recipes past max_retained_bytes were not restored"
             );
         }

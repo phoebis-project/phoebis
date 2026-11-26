@@ -4220,7 +4220,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nkeepalive:\n  max_sessions: 64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nsessions:\n  max_agents: 96\n  max_sessions: 64\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -4397,6 +4397,11 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         ),
         (Some(1), Some(64)),
         "the session count beside the cap the file sets"
+    );
+    assert_eq!(
+        overview["limits"]["agents"]["max"].as_u64(),
+        Some(96),
+        "the agent cap the file sets"
     );
     let text = client
         .get(format!("http://127.0.0.1:{metrics_port}/metrics"))

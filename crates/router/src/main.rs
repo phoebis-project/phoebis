@@ -186,9 +186,11 @@ fn main() -> anyhow::Result<()> {
                 days(config.stats.rollup_retention_days)
             );
             println!(
-                "keepalive: {} sessions, {} agents, {} MiB retained",
-                config.keepalive.max_sessions,
-                config.keepalive.max_agents,
+                "sessions: {} sessions, {} agents",
+                config.sessions.max_sessions, config.sessions.max_agents
+            );
+            println!(
+                "keepalive: {} MiB retained",
                 config.keepalive.max_retained_bytes >> 20
             );
             let key = app::load_storage_key(&config.storage)?;

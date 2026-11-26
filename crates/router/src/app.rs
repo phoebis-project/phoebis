@@ -23,7 +23,7 @@ use phoebis_relay::{
 };
 use phoebis_session_engine::{
     companion_router, events_router, spawn_observer, Engine, EngineParts, KeepaliveTiming,
-    PERSIST_INTERVAL,
+    SessionCaps, PERSIST_INTERVAL,
 };
 use phoebis_store::permissions::data_dir_of;
 use phoebis_store::{StorageKey, Store};
@@ -418,6 +418,10 @@ pub async fn run_until(
         pricing: pricing.clone(),
         relay: relay.clone(),
         router: router_task.clone(),
+        session_caps: SessionCaps {
+            max_agents: config.sessions.max_agents,
+            max_sessions: config.sessions.max_sessions,
+        },
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
         store: store.clone(),
         tables: tables.clone(),

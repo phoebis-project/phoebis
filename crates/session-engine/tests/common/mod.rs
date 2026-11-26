@@ -28,7 +28,7 @@ use phoebis_relay::AccountingSource;
 use phoebis_routing::RouterConfig;
 use phoebis_session_engine::{
     events_router, AgentState, Engine, EngineParts, KeepaliveLimits, KeepalivePolicy,
-    KeepaliveTiming, Lifecycle, Reason, RecipeView, EVENTS_PATH,
+    KeepaliveTiming, Lifecycle, Reason, RecipeView, SessionCaps, EVENTS_PATH,
 };
 use phoebis_store::{AccountKind, StorageKey, Store};
 use serde_json::{json, Value};
@@ -119,6 +119,8 @@ pub struct Rig {
     /// The spec's price table, kept so `restart` builds its engine with what this one was built with.
     pub pricing: PriceRevisions,
     pub sequence: u64,
+    /// The spec's session caps, kept so `restart` builds its engine with what this one was built with.
+    pub session_caps: SessionCaps,
     /// The registry file of a rig built `on_disk`, which a restart test opens beside the store.
     pub store_path: Option<PathBuf>,
     pub sub: Subscriber,
@@ -174,6 +176,7 @@ pub struct RigSpec {
     /// The router task's settings. The default's share pricer prices nothing, so a case that reads an account's burn
     /// hands in a pricer of its own.
     pub router: RouterConfig,
+    pub session_caps: SessionCaps,
     pub session_expiry: Duration,
     /// The key the registry seals under and the companion's pseudonyms are digested with: drawn per rig by default,
     /// and a fixed one for a case whose pseudonyms have to sort in a known order.
@@ -205,6 +208,7 @@ impl Default for RigSpec {
             pool: PoolSpec::default(),
             pricing: PriceRevisions::shipped(),
             router: RouterConfig::default(),
+            session_caps: SessionCaps::default(),
             session_expiry: Duration::from_secs(86_400),
             storage_key: StorageKey::generate(),
             store_clock: relay_common::wall(),
@@ -304,6 +308,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         pricing,
         relay: h.relay.clone(),
         router: h.router.clone(),
+        session_caps: spec.session_caps.clone(),
         session_expiry: spec.session_expiry,
         store: h.store.clone(),
         tables: tables.clone(),
@@ -322,6 +327,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         metrics,
         pricing: spec.pricing,
         sequence: 0,
+        session_caps: spec.session_caps,
         store_path,
         sub,
         tables,
@@ -397,11 +403,16 @@ impl Rig {
     /// empty and holds only what the persistence round trip brings back, the first engine's `flush_persisted`
     /// and then this one's `load_persisted`.
     pub async fn restart(&self) -> Arc<Engine> {
-        self.restart_with_limits(self.limits.clone()).await
+        self.restart_with_limits(self.session_caps.clone(), self.limits.clone())
+            .await
     }
 
-    /// `restart` under the limits a changed bootstrap file would give the next process.
-    pub async fn restart_with_limits(&self, limits: KeepaliveLimits) -> Arc<Engine> {
+    /// `restart` under the session caps and the byte cap a changed bootstrap file would give the next process.
+    pub async fn restart_with_limits(
+        &self,
+        session_caps: SessionCaps,
+        limits: KeepaliveLimits,
+    ) -> Arc<Engine> {
         let clock: Clock = {
             let c = self.clock.clone();
             Arc::new(move || c.load(Ordering::SeqCst))
@@ -417,6 +428,7 @@ impl Rig {
             pricing: Arc::new(Pricing::new(self.pricing.clone())),
             relay: self.h.relay.clone(),
             router: self.h.router.clone(),
+            session_caps,
             session_expiry: Duration::from_secs(86_400),
             store: self.h.store.clone(),
             tables: self.tables.clone(),

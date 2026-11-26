@@ -26,7 +26,7 @@ use phoebis_profile::{
 };
 use phoebis_relay::{AccountingSource, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle, SharePricer};
-use phoebis_session_engine::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
+use phoebis_session_engine::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming, SessionCaps};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, PinBurn, Secret,
     StorageKey, Store,
@@ -1526,6 +1526,7 @@ async fn build_app_bounded(
         pricing: pricing.clone(),
         relay: relay.clone(),
         router: router_handle.clone(),
+        session_caps: SessionCaps::default(),
         session_expiry: Duration::from_secs(86_400),
         store: store.clone(),
         tables: tables.clone(),

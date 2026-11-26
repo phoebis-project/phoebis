@@ -26,8 +26,8 @@ use phoebis_store::{AccountKind, Store};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::engine::config::KeepaliveLimits;
 use crate::engine::persist::Dirty;
+use crate::sessions::config::SessionCaps;
 use crate::sessions::state::{
     agent_ref, Arrived, ParkPassed, SessionKey, SessionsState, Slot, AGENT_HELD, MAIN_AGENT,
 };
@@ -35,7 +35,7 @@ use crate::sessions::view::SessionCounts;
 use crate::warming::agent::{warming_mut, warming_ref};
 use crate::warming::breakeven::{CeilingInputs, FactorRows};
 use crate::warming::causes::{Reason, Wasted};
-use crate::warming::config::{KeepalivePolicy, KeepaliveTiming, MAX_WORKERS};
+use crate::warming::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, MAX_WORKERS};
 use crate::warming::gate::{
     ceilings_for, gate, pool_policies, refresh_policy, Gate, RouterView, Verdict,
 };
@@ -69,6 +69,7 @@ pub struct EngineParts {
     pub pricing: Arc<Pricing>,
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
+    pub session_caps: SessionCaps,
     pub session_expiry: Duration,
     /// The registry's own store, read for the sessions and recipes a restart resumes and for the key the companion's
     /// account pseudonyms are digested under.
@@ -163,6 +164,7 @@ impl Engine {
             inner: Mutex::new(Inner::empty(
                 parts.timing,
                 parts.limits.clone(),
+                parts.session_caps.clone(),
                 parts.session_expiry.as_millis() as i64,
             )),
             parts,
@@ -220,9 +222,16 @@ impl Engine {
             .collect()
     }
 
-    /// The caps the bootstrap file's `keepalive` block sets, which the sessions overview answers beside its counts.
+    /// The byte cap that the bootstrap file's `keepalive` block sets, which the sessions overview answers beside its
+    /// retained bytes.
     pub fn limits(&self) -> &KeepaliveLimits {
         &self.parts.limits
+    }
+
+    /// The two caps that the bootstrap file's `sessions` block sets, which the sessions overview answers beside its
+    /// counts.
+    pub fn session_caps(&self) -> &SessionCaps {
+        &self.parts.session_caps
     }
 
     /// The pools whose policy warms caches, read off the router's snapshot as the scheduler reads a pool's policy
@@ -315,10 +324,15 @@ impl Inner {
     pub(crate) fn empty(
         timing: KeepaliveTiming,
         limits: KeepaliveLimits,
+        session_caps: SessionCaps,
         session_expiry_ms: i64,
     ) -> Inner {
         Inner {
-            sessions: SessionsState::new(limits.max_agents, limits.max_sessions, session_expiry_ms),
+            sessions: SessionsState::new(
+                session_caps.max_agents,
+                session_caps.max_sessions,
+                session_expiry_ms,
+            ),
             warming: WarmingState::new(timing, limits.max_retained_bytes),
             closed: false,
             dirty: Dirty::default(),

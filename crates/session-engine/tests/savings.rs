@@ -1073,7 +1073,6 @@ async fn a_recipe_a_failed_request_left_armed_lapses_and_is_evicted_as_any_armed
     let mut r = rig(RigSpec {
         limits: phoebis_session_engine::KeepaliveLimits {
             max_retained_bytes: one * 5 / 2,
-            ..phoebis_session_engine::KeepaliveLimits::default()
         },
         ..RigSpec::default()
     })
@@ -1137,7 +1136,6 @@ async fn an_aside_recipe_counts_against_the_memory_bound_and_yields_first_to_its
     let mut r = rig(RigSpec {
         limits: phoebis_session_engine::KeepaliveLimits {
             max_retained_bytes: limit,
-            ..phoebis_session_engine::KeepaliveLimits::default()
         },
         ..RigSpec::default()
     })

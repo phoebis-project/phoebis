@@ -262,10 +262,11 @@ mod tests {
     use phoebis_ledger::PlanTables;
     use phoebis_store::AccountKind;
 
-    use crate::engine::config::KeepaliveLimits;
     use crate::engine::Inner;
+    use crate::sessions::config::SessionCaps;
     use crate::sessions::state::{Session, SessionKey, AGENT_HELD};
     use crate::warming::agent::warming_mut;
+    use crate::warming::config::KeepaliveLimits;
     use crate::warming::observation::Observation;
     use crate::warming::recipe::make_recipe;
     use crate::warming::savings::AttemptFunding;
@@ -568,7 +569,12 @@ revisions:
     #[test]
     fn a_recipe_put_back_after_a_failed_request_gates_on_its_own_holder() {
         let key: SessionKey = ("k".into(), "s".into());
-        let mut inner = Inner::empty(KeepaliveTiming::default(), KeepaliveLimits::default(), 0);
+        let mut inner = Inner::empty(
+            KeepaliveTiming::default(),
+            KeepaliveLimits::default(),
+            SessionCaps::default(),
+            0,
+        );
         let mut armed = holding("a", Some(1));
         armed.expires = Some(300_000);
         inner.sessions.entries.insert(

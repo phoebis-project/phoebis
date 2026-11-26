@@ -1,5 +1,5 @@
-//! The cache warming's configuration: the per-pool policy a pool row carries, parsed on every read, and the
-//! schedule's fixed timing.
+//! The cache warming's configuration: the process-wide byte cap that the bootstrap file carries, read once at start,
+//! the per-pool policy a pool row carries, parsed on every read, and the schedule's fixed timing.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,7 @@ pub const MIN_AFFINITY_SECONDS: u64 = 300;
 /// The most probes running at once.
 pub const MAX_WORKERS: usize = 4;
 
-pub(crate) fn bound<E>(
+fn bound<E>(
     field: &'static str,
     value: u64,
     min: u64,
@@ -28,6 +28,52 @@ pub(crate) fn bound<E>(
         Ok(())
     } else {
         Err(err(field, min, max, value))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields, default)]
+pub struct KeepaliveLimits {
+    pub max_retained_bytes: usize,
+}
+
+impl Default for KeepaliveLimits {
+    fn default() -> Self {
+        KeepaliveLimits {
+            max_retained_bytes: 256 << 20,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum LimitsError {
+    #[error("keepalive.{field} must be between {min} and {max}, not {value}")]
+    OutOfRange {
+        field: &'static str,
+        min: u64,
+        max: u64,
+        value: u64,
+    },
+}
+
+impl KeepaliveLimits {
+    /// `max_request_bytes` is the relay's per-body bound, which is also the largest recipe the engine retains. A
+    /// retained budget below it could not hold one recipe the relay accepted.
+    pub fn validate(&self, max_request_bytes: usize) -> Result<(), LimitsError> {
+        let range = |field, min, max, value| LimitsError::OutOfRange {
+            field,
+            min,
+            max,
+            value,
+        };
+        bound(
+            "max_retained_bytes",
+            self.max_retained_bytes as u64,
+            max_request_bytes as u64,
+            512 << 20,
+            range,
+        )?;
+        Ok(())
     }
 }
 

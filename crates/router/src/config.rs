@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-use phoebis_session_engine::{KeepaliveLimits, LimitsError};
+use phoebis_session_engine::{KeepaliveLimits, LimitsError, SessionCaps};
 use phoebis_store::Secret;
 use serde::Deserialize;
 
@@ -19,8 +19,8 @@ pub struct Config {
     pub admin: AdminConfig,
     #[serde(default, deserialize_with = "present_features")]
     pub features: Option<FeaturesConfig>,
-    /// Process-wide keepalive limits, read once at start; whether probes run, and their tuning, are per-pool
-    /// registry settings.
+    /// The process-wide byte cap of the cache warming, read once at start. Whether probes run, and their tuning, are
+    /// per-pool registry settings.
     #[serde(default)]
     pub keepalive: KeepaliveLimits,
     pub proxy: ProxyConfig,
@@ -262,6 +262,10 @@ pub struct RoutingConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct SessionsConfig {
     pub expire_after_seconds: u64,
+    /// The most agent records that hold a slot at once, read once at start.
+    pub max_agents: usize,
+    /// The most sessions that hold a slot at once, read once at start.
+    pub max_sessions: usize,
     /// How long a session no companion reports stays listed past its newest pin use, its last request or its
     /// companion's end, and how long a line's pin stays listed on such a row past its last use. Bounded by
     /// `expire_after_seconds`.
@@ -377,8 +381,11 @@ impl Default for RoutingConfig {
 
 impl Default for SessionsConfig {
     fn default() -> Self {
+        let caps = SessionCaps::default();
         SessionsConfig {
             expire_after_seconds: 86_400,
+            max_agents: caps.max_agents,
+            max_sessions: caps.max_sessions,
             non_companion_idle_seconds: 3_600,
             memory_cap: phoebis_relay::MEMORY_CAP,
             memory_idle_seconds: (phoebis_relay::MEMORY_IDLE_MS / 1_000) as u64,
@@ -508,6 +515,18 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     if config.sessions.expire_after_seconds < 60 {
         return Err(ConfigError::SessionExpiryTooShort);
     }
+    within(
+        "sessions.max_agents",
+        config.sessions.max_agents as u64,
+        1,
+        16_384,
+    )?;
+    within(
+        "sessions.max_sessions",
+        config.sessions.max_sessions as u64,
+        1,
+        4_096,
+    )?;
     within(
         "sessions.non_companion_idle_seconds",
         config.sessions.non_companion_idle_seconds,
@@ -1150,6 +1169,32 @@ mod tests {
             ),
             (1024, 7)
         );
+    }
+
+    #[test]
+    fn the_two_session_caps_are_refused_outside_their_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        for (name, body, expected) in [
+            (
+                "agents-low",
+                "sessions:\n  max_agents: 0\n",
+                "sessions.max_agents must be between 1 and 16384, not 0",
+            ),
+            (
+                "agents-high",
+                "sessions:\n  max_agents: 16385\n",
+                "sessions.max_agents must be between 1 and 16384, not 16385",
+            ),
+            (
+                "sessions-high",
+                "sessions:\n  max_sessions: 4097\n",
+                "sessions.max_sessions must be between 1 and 4096, not 4097",
+            ),
+        ] {
+            let error = load_unresolved(&file(dir.path(), name, body)).unwrap_err();
+            assert_eq!(error.to_string(), expected, "{name}");
+        }
     }
 
     #[test]

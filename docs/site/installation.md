@@ -265,11 +265,12 @@ CA's two files read-only, so it is safe to run against a production file while t
     `, no regime` for a model without the map and `, 1 regime: {name}` for one, and a file whose newest entry takes
     effect before the built-in model's newest adds `, the built-in model has a newer revision {date}`
 12. `retention {n days|forever}, rollups {n days|forever}`
-13. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
-14. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the
+13. `sessions: {n} sessions, {n} agents`
+14. `keepalive: {n} MiB retained`
+15. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the
     registry is not there yet, or `registry at {config.storage.path} has no key canary yet. A sealed row opens under
     the key, and the next start seals one` for a registry from before the canary
-15. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
+16. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
 <!-- check-config: end -->
 
 Further warning lines name a storage key file, data directory, database, TLS key file or, with a `features` block, the
@@ -433,9 +434,7 @@ admin:
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and for how long, are pool settings in
   # the registry. The largest retained recipe follows proxy.max_request_bytes, the relay's request body bound.
-  max_agents: 1024
   max_retained_bytes: 268435456
-  max_sessions: 128
 proxy:
   listen: 127.0.0.1:8317
   # tls: {cert_file: ..., key_file: ...} names your certificate pair and the listener terminates TLS.
@@ -460,6 +459,9 @@ routing:
   startup_fetch_seconds: 30
 sessions:
   expire_after_seconds: 86400
+  # The most agent records and the most sessions that hold a slot at once, read once at start.
+  max_agents: 1024
+  max_sessions: 128
   # The relay's memory of a session's previous request id and prompt id: entries held in process, how long one
   # may go unseen before it leaves memory, and how long its on-disk copy is kept.
   memory_cap: 65536
@@ -583,19 +585,15 @@ Refused with:
 
 ### keepalive
 
-Defaults whole. These are process-wide limits read once at start, so a change takes a restart, and the per-pool tuning
-is on the [Keepalive](keepalive.md) page. Every bound below refuses with `keepalive.{field} must be between {min} and
+Defaults whole. This is a process-wide limit read once at start, so a change takes a restart, and the per-pool tuning is
+on the [Keepalive](keepalive.md) page. The bound refuses with `keepalive.max_retained_bytes must be between {min} and
 {max}, not {value}`.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
-| `max_agents` | `1024` | 1 to 16384 |
 | `max_retained_bytes` | `268435456` | `proxy.max_request_bytes` (the body bound a recipe follows) to 536870912 |
-| `max_sessions` | `128` | 1 to 4096 |
 
-`max_sessions` counts the sessions that hold a slot, from a session's first request until its end, so neither a
-registered session that has sent nothing nor an ended one holds one, though an ended session's entry stays until the
-session expiry sweeps it. The mod's lease is 90 seconds and four probes run at once. Neither is a key.
+Four probes run at once, and that count is not a key.
 
 ### proxy
 
@@ -681,9 +679,16 @@ the facts that a companion mod reports of the session itself (its branch, its pa
 counted from the session's last report. The three `memory_` keys bound the relay's memory of a session's previous
 request id and prompt id, the record behind `cc_prev_req` ([client](client.md#the-environment-block)).
 
+`max_agents` and `max_sessions` are read once at start, so a change takes a restart. `max_sessions` counts the sessions
+that hold a slot, from a session's first request until its end, so neither a registered session that has sent nothing
+nor an ended one holds one, though an ended session's entry stays until the session expiry sweeps it. The mod's lease is
+90 seconds, and it is not a key.
+
 | Key | Default | Accepts |
 | --- | --- | --- |
 | `expire_after_seconds` | `86400` | at least 60 |
+| `max_agents` | `1024` | 1 to 16384 |
+| `max_sessions` | `128` | 1 to 4096 |
 | `memory_cap` | `65536` | 1 to 1048576 entries held in process, and past it the least recently seen entry leaves memory |
 | `memory_idle_seconds` | `86400` | 60 to 31536000, how long an entry may go unseen before it leaves memory |
 | `memory_retention_days` | `30` | 1 to 3650, how long the on-disk copy of an entry is kept after its last request |
@@ -692,6 +697,8 @@ request id and prompt id, the record behind `cc_prev_req` ([client](client.md#th
 Refused with:
 
 - `expire_after_seconds`: `sessions.expire_after_seconds must be at least 60`
+- `max_agents`: `sessions.max_agents must be between 1 and 16384, not {value}`
+- `max_sessions`: `sessions.max_sessions must be between 1 and 4096, not {value}`
 - `memory_cap`: `sessions.memory_cap must be between 1 and 1048576, not {value}`
 - `memory_idle_seconds`: `sessions.memory_idle_seconds must be between 60 and 31536000, not {value}`
 - `memory_retention_days`: `sessions.memory_retention_days must be between 1 and 3650, not {value}`
@@ -787,8 +794,8 @@ Refused with:
 
 The checks above run in a fixed order at load, not block by block: `usage.refresh_concurrency`,
 `usage.limit_reset_warning_days`, `storage.path`, the `proxy` bounds, `routing.model_rejection_seconds`,
-`routing.cooldown_fallback_seconds`, the `keepalive` bounds, `routing.startup_fetch_seconds`,
-`routing.catalog_refresh_seconds`, the four `sessions` keys, `stats.body_capture_max_hours`,
+`routing.cooldown_fallback_seconds`, the `keepalive` bound, `routing.startup_fetch_seconds`,
+`routing.catalog_refresh_seconds`, the seven `sessions` keys, `stats.body_capture_max_hours`,
 `stats.rollup_retention_days`, `stats.ledger_path`, and last whether `stats.ledger_path` and `storage.path` name the
 same file. The first failure is the one reported, so fix the file top to bottom to find the next one.
 

@@ -120,12 +120,13 @@ the prompt is dropped under `session_opted_out`.
 In the console the switch is in the pool dialog: Pools, Edit, the Keepalive group under Caching, "Keep prompt caches
 warm", with the policy's three numbers under it (see [Pools](console.md#pools)).
 
-The bootstrap file's `keepalive` block holds the process-wide bounds alone, `max_agents`, `max_retained_bytes` and
-`max_sessions`, read once at start, so changing one takes a restart (see [keepalive](installation.md#keepalive)). The
-lease and the four probe workers are fixed. A session holds a slot of `max_sessions` from its first real request until
-its end, and its agents hold slots of `max_agents` from that request until their records leave. A first request over the
-session cap is not kept and reads `session_limit`, and one over the agent cap reads `agent_limit`, the words a
-registration over either cap answers.
+The bootstrap file's `keepalive` block holds the process-wide byte cap alone, `max_retained_bytes`, and its `sessions`
+block holds the two caps of the session engine, `max_agents` and `max_sessions`. Each is read once at start, so changing
+one takes a restart (see [keepalive](installation.md#keepalive) and [sessions](installation.md#sessions)). The lease and
+the four probe workers are fixed. A session holds a slot of `max_sessions` from its first real request until its end,
+and its agents hold slots of `max_agents` from that request until their records leave. A first request over the session
+cap is not kept and reads `session_limit`, and one over the agent cap reads `agent_limit`, the words a registration over
+either cap answers.
 
 ## Which requests re-arm a recipe
 
@@ -607,6 +608,6 @@ rule follows only when the lease length passes first. A recipe whose entry expir
 `expired_at_restart`, and a session the mod had ended is dropped. The probes such a recipe left unanswered settle as
 wasted only after the registry has dropped them from the agent: a save that fails sends nothing, and a crash between
 that save and the ledger's write leaves them uncounted rather than counted twice. A prompt the storage key cannot open
-is dropped too, and its agent keeps everything else. The bootstrap file's `keepalive` limits in force at the start bound
-what comes back: when they are lower than before, the newest sessions, agents and recipes are restored and the rest are
-evicted.
+is dropped too, and its agent keeps everything else. The caps of the bootstrap file's `sessions` and `keepalive` blocks
+in force at the start bound what comes back: when they are lower than before, the newest sessions, agents and recipes
+are restored and the rest are evicted.

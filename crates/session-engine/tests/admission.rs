@@ -13,6 +13,7 @@ use phoebis_bus::{
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
 use phoebis_session_engine::{
     Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Lifecycle, Reason, RecipeState,
+    SessionCaps,
 };
 use serde_json::json;
 
@@ -690,9 +691,11 @@ async fn a_stream_arms_before_completion_and_a_cancel_discards() {
 async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     let mut r = rig(RigSpec {
         limits: KeepaliveLimits {
+            max_retained_bytes: 32 << 20,
+        },
+        session_caps: SessionCaps {
             max_agents: 1,
             max_sessions: 1,
-            max_retained_bytes: 32 << 20,
         },
         ..RigSpec::default()
     })
@@ -734,7 +737,6 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     let mut r2 = rig(RigSpec {
         limits: KeepaliveLimits {
             max_retained_bytes: 32 << 20,
-            ..KeepaliveLimits::default()
         },
         ..RigSpec::default()
     })
@@ -769,7 +771,6 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     let mut r3 = rig(RigSpec {
         limits: KeepaliveLimits {
             max_retained_bytes: one * 5 / 2,
-            ..KeepaliveLimits::default()
         },
         ..RigSpec::default()
     })
@@ -841,9 +842,9 @@ async fn start_agent(r: &mut Rig, agent: &str) {
 async fn a_registered_session_holds_no_slot_until_its_first_request_and_one_over_the_session_cap_keeps_nothing(
 ) {
     let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_sessions: 1,
-            ..KeepaliveLimits::default()
+            ..SessionCaps::default()
         },
         ..RigSpec::default()
     })
@@ -895,10 +896,9 @@ async fn a_registered_session_holds_no_slot_until_its_first_request_and_one_over
 #[tokio::test]
 async fn a_first_request_whose_agents_pass_the_agent_cap_keeps_nothing_and_takes_no_slot() {
     let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_agents: 1,
             max_sessions: 2,
-            ..KeepaliveLimits::default()
         },
         ..RigSpec::default()
     })
@@ -929,9 +929,9 @@ async fn a_first_request_whose_agents_pass_the_agent_cap_keeps_nothing_and_takes
 #[tokio::test]
 async fn a_session_refused_the_slot_expires_one_expiry_after_its_newest_refused_request() {
     let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_sessions: 1,
-            ..KeepaliveLimits::default()
+            ..SessionCaps::default()
         },
         session_expiry: Duration::from_secs(600),
         ..RigSpec::default()
@@ -973,9 +973,9 @@ async fn a_session_refused_the_slot_expires_one_expiry_after_its_newest_refused_
 #[tokio::test]
 async fn a_same_generation_replacement_keeps_the_slot_its_session_took() {
     let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_sessions: 1,
-            ..KeepaliveLimits::default()
+            ..SessionCaps::default()
         },
         ..RigSpec::default()
     })
@@ -1009,7 +1009,6 @@ async fn eviction_takes_unattended_then_the_oldest_idle_and_nothing_when_it_cann
     let spec = || RigSpec {
         limits: KeepaliveLimits {
             max_retained_bytes: 25_000,
-            ..KeepaliveLimits::default()
         },
         ..RigSpec::default()
     };
@@ -1080,7 +1079,6 @@ async fn an_oversized_request_invalidates_only_its_own_agent() {
     let mut r = rig(RigSpec {
         limits: KeepaliveLimits {
             max_retained_bytes: 32 << 20,
-            ..KeepaliveLimits::default()
         },
         ..RigSpec::default()
     })

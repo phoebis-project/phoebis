@@ -14,7 +14,7 @@ use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_session_engine::{
     CompanionState, Engine, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, Lifecycle, ParkKind,
-    Reason, LEASE_MS,
+    Reason, SessionCaps, LEASE_MS,
 };
 use phoebis_store::engine_state::BodyWrite;
 use phoebis_store::{
@@ -1747,17 +1747,19 @@ async fn a_restart_under_smaller_limits_restores_the_newest_rows_and_disposes_th
         |session: &str, agent: &str, recipe: bool| (session.to_string(), agent.to_string(), recipe);
 
     for limits in [
-        KeepaliveLimits {
+        SessionCaps {
             max_sessions: 1,
-            ..KeepaliveLimits::default()
+            ..SessionCaps::default()
         },
-        KeepaliveLimits {
+        SessionCaps {
             max_agents: 2,
-            ..KeepaliveLimits::default()
+            ..SessionCaps::default()
         },
     ] {
         let (r, _, newer) = two_sessions().await;
-        let second = r.restart_with_limits(limits.clone()).await;
+        let second = r
+            .restart_with_limits(limits.clone(), KeepaliveLimits::default())
+            .await;
         second.load_persisted().await;
         let stats = second.stats();
         assert_eq!(
@@ -1797,9 +1799,8 @@ async fn a_restart_under_smaller_limits_restores_the_newest_rows_and_disposes_th
     let (r, older, newer) = two_sessions().await;
     let limits = KeepaliveLimits {
         max_retained_bytes: older + newer - 1,
-        ..KeepaliveLimits::default()
     };
-    let second = r.restart_with_limits(limits).await;
+    let second = r.restart_with_limits(SessionCaps::default(), limits).await;
     second.load_persisted().await;
     let stats = second.stats();
     assert_eq!(
@@ -1844,10 +1845,13 @@ async fn a_restart_under_the_session_cap_restores_the_session_that_sent_a_reques
     r.event(session_start("newer")).await.unwrap();
     r.engine.flush_persisted().await;
     let second = r
-        .restart_with_limits(KeepaliveLimits {
-            max_sessions: 1,
-            ..KeepaliveLimits::default()
-        })
+        .restart_with_limits(
+            SessionCaps {
+                max_sessions: 1,
+                ..SessionCaps::default()
+            },
+            KeepaliveLimits::default(),
+        )
         .await;
     second.load_persisted().await;
     assert_eq!(
@@ -1888,10 +1892,13 @@ async fn a_saved_session_without_its_slot_member_holds_its_slot_where_it_carries
         })
         .unwrap();
     let second = r
-        .restart_with_limits(KeepaliveLimits {
-            max_sessions: 1,
-            ..KeepaliveLimits::default()
-        })
+        .restart_with_limits(
+            SessionCaps {
+                max_sessions: 1,
+                ..SessionCaps::default()
+            },
+            KeepaliveLimits::default(),
+        )
         .await;
     second.load_persisted().await;
     let BusEvent::RequestObserved(mut observed) = r.observed("first", "main", BODY) else {
@@ -1917,9 +1924,9 @@ async fn a_saved_session_without_its_slot_member_holds_its_slot_where_it_carries
 async fn a_refused_session_restored_by_a_restart_leaves_one_expiry_after_its_newest_refused_request(
 ) {
     let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_sessions: 1,
-            ..KeepaliveLimits::default()
+            ..SessionCaps::default()
         },
         ..on_disk()
     })
@@ -1983,10 +1990,13 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
         (1, 1)
     );
     let second = r
-        .restart_with_limits(KeepaliveLimits {
-            max_agents: 1,
-            ..KeepaliveLimits::default()
-        })
+        .restart_with_limits(
+            SessionCaps {
+                max_agents: 1,
+                ..SessionCaps::default()
+            },
+            KeepaliveLimits::default(),
+        )
         .await;
     second.load_persisted().await;
     let stats = second.stats();
@@ -2030,9 +2040,9 @@ async fn agent_start(r: &mut Rig, agent: &str) -> Result<(), (String, u16)> {
 #[tokio::test]
 async fn a_session_at_the_agent_limit_frees_a_slot_when_its_released_record_leaves() {
     let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_agents: 2,
-            ..KeepaliveLimits::default()
+            ..SessionCaps::default()
         },
         ..RigSpec::default()
     })
@@ -2200,10 +2210,13 @@ async fn a_saved_released_record_whose_leave_passed_while_the_router_was_down_do
     r.engine.flush_persisted().await;
     r.advance(3_600_000);
     r.engine = r
-        .restart_with_limits(KeepaliveLimits {
-            max_agents: 3,
-            ..KeepaliveLimits::default()
-        })
+        .restart_with_limits(
+            SessionCaps {
+                max_agents: 3,
+                ..SessionCaps::default()
+            },
+            KeepaliveLimits::default(),
+        )
         .await;
     r.engine.load_persisted().await;
     let loaded = |r: &Rig, agent: &str| r.lifecycle(agent).is_some();

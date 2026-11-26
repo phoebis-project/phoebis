@@ -1,7 +1,7 @@
 //! The limits the bootstrap file carries and the policy a pool row carries, with the bounds of each.
 use phoebis_session_engine::{
-    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
-    LEASE_MS, LEASE_SECONDS, MAX_WORKERS, ONE_HOUR_MS,
+    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, SessionCaps,
+    FIVE_MINUTES_MS, LEASE_MS, LEASE_SECONDS, MAX_WORKERS, ONE_HOUR_MS,
 };
 use serde_json::json;
 
@@ -41,12 +41,13 @@ impl Drop for SeamCleared {
 #[test]
 fn the_default_limits_are_the_specs() {
     let _seam = SeamCleared::new();
+    let caps = SessionCaps::default();
     let limits = KeepaliveLimits::default();
     assert_eq!(
         (
-            limits.max_agents,
+            caps.max_agents,
             limits.max_retained_bytes,
-            limits.max_sessions
+            caps.max_sessions
         ),
         (1_024, 256 << 20, 128)
     );
@@ -116,7 +117,6 @@ fn the_retained_budget_accepts_the_relays_body_bound_to_512_mib() {
     let with = |retained: usize| {
         KeepaliveLimits {
             max_retained_bytes: retained,
-            ..KeepaliveLimits::default()
         }
         .validate(RELAY_BOUND)
     };
@@ -144,32 +144,6 @@ fn the_retained_budget_accepts_the_relays_body_bound_to_512_mib() {
 
 #[test]
 fn limits_and_policies_outside_their_bounds_are_refused() {
-    let with = |f: fn(&mut KeepaliveLimits)| {
-        let mut l = KeepaliveLimits::default();
-        f(&mut l);
-        l.validate(RELAY_BOUND)
-    };
-    assert!(matches!(
-        with(|l| l.max_agents = 0),
-        Err(LimitsError::OutOfRange {
-            field: "max_agents",
-            ..
-        })
-    ));
-    assert!(matches!(
-        with(|l| l.max_agents = 16_385),
-        Err(LimitsError::OutOfRange {
-            field: "max_agents",
-            ..
-        })
-    ));
-    assert!(matches!(
-        with(|l| l.max_sessions = 4_097),
-        Err(LimitsError::OutOfRange {
-            field: "max_sessions",
-            ..
-        })
-    ));
     assert!(
         serde_json::from_str::<KeepaliveLimits>(r#"{"probe_enabled":true}"#).is_err(),
         "unknown fields reject the block"

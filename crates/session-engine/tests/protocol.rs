@@ -1030,10 +1030,9 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
         "no refusal took the session's next sequence"
     );
     let bounded = rig(RigSpec {
-        limits: phoebis_session_engine::KeepaliveLimits {
+        session_caps: phoebis_session_engine::SessionCaps {
             max_sessions: 1,
             max_agents: 1,
-            ..RigSpec::default().limits
         },
         ..RigSpec::default()
     })
@@ -2155,9 +2154,9 @@ async fn a_revival_after_mains_record_left_registers_main_anew() {
 #[tokio::test]
 async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_limit() {
     let mut r = rig(RigSpec {
-        limits: phoebis_session_engine::KeepaliveLimits {
+        session_caps: phoebis_session_engine::SessionCaps {
             max_agents: 1,
-            ..RigSpec::default().limits
+            ..RigSpec::default().session_caps
         },
         ..RigSpec::default()
     })
@@ -2200,9 +2199,9 @@ async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_lim
 #[tokio::test]
 async fn an_ended_sessions_released_records_hold_their_agent_slots_until_they_leave() {
     let mut r = rig(RigSpec {
-        limits: phoebis_session_engine::KeepaliveLimits {
+        session_caps: phoebis_session_engine::SessionCaps {
             max_agents: 1,
-            ..RigSpec::default().limits
+            ..RigSpec::default().session_caps
         },
         ..RigSpec::default()
     })

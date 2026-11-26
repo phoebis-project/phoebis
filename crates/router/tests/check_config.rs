@@ -505,9 +505,7 @@ fn a_cost_model_entry_dated_after_now_is_held_and_named_as_next_beside_the_entry
 }
 
 /// Each removed key with the block it sat in and its lines.
-const REMOVED_KEYS: [(&str, &str); 4] = [
-    ("routing", "  catalog_cache_seconds: 60\n"), // removed name
-    ("usage", "  cache_ttl_seconds: 60\n"),       // removed name
+const REMOVED_KEYS: [(&str, &str); 6] = [
     (
         "admin",
         include_str!("fixtures/removed-keys/admin-origin.yaml"),
@@ -516,6 +514,10 @@ const REMOVED_KEYS: [(&str, &str); 4] = [
         "admin",
         include_str!("fixtures/removed-keys/admin-plain-http.yaml"),
     ),
+    ("keepalive", "  max_agents: 1024\n"),
+    ("keepalive", "  max_sessions: 128\n"),
+    ("routing", "  catalog_cache_seconds: 60\n"), // removed name
+    ("usage", "  cache_ttl_seconds: 60\n"),       // removed name
 ];
 
 #[test]

@@ -2,7 +2,7 @@
 mod common;
 use common::*;
 use phoebis_session_engine::{
-    AgentState, CompanionState, KeepaliveLimits, Lifecycle, Reason, RecipeState, SessionFacts,
+    AgentState, CompanionState, Lifecycle, Reason, RecipeState, SessionCaps, SessionFacts,
 };
 use serde_json::json;
 
@@ -23,9 +23,9 @@ fn first_request(r: &Rig, key_id: &str, session: &str) {
 #[tokio::test]
 async fn the_session_bound_counts_live_sessions_only() {
     let mut rig = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_sessions: 128,
-            ..RigSpec::default().limits
+            ..RigSpec::default().session_caps
         },
         ..RigSpec::default()
     })
@@ -62,9 +62,9 @@ async fn a_restart_of_an_ended_session_under_a_new_instance_takes_a_slot() {
     // The rig's own bootstrap session holds one slot once it sends a request, so the cap here is two: one for
     // it, one for "a" or "b".
     let mut rig = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_sessions: 2,
-            ..RigSpec::default().limits
+            ..RigSpec::default().session_caps
         },
         ..RigSpec::default()
     })
@@ -85,9 +85,9 @@ async fn a_restart_of_an_ended_session_under_a_new_instance_takes_a_slot() {
 #[tokio::test]
 async fn a_same_instance_recovery_of_a_live_session_takes_no_slot() {
     let mut rig = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_sessions: 2,
-            ..RigSpec::default().limits
+            ..RigSpec::default().session_caps
         },
         ..RigSpec::default()
     })
@@ -223,10 +223,9 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
 #[tokio::test]
 async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
     let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
+        session_caps: SessionCaps {
             max_sessions: 2,
             max_agents: 3,
-            ..KeepaliveLimits::default()
         },
         ..RigSpec::default()
     })

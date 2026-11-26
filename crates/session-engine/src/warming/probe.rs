@@ -923,11 +923,11 @@ pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::engine::config::KeepaliveLimits;
     use crate::engine::Inner;
+    use crate::sessions::config::SessionCaps;
     use crate::sessions::state::{agent_mut, Agent, Session};
     use crate::warming::agent::AgentWarming;
-    use crate::warming::config::KeepaliveTiming;
+    use crate::warming::config::{KeepaliveLimits, KeepaliveTiming};
     use phoebis_ledger::PriceRevisions;
 
     use super::*;
@@ -954,7 +954,12 @@ mod tests {
         let key: SessionKey = ("k".into(), "s".into());
         let mut agents = BTreeMap::new();
         agents.insert("main".to_string(), Agent::new("main", "k", 1, 0));
-        let mut inner = Inner::empty(KeepaliveTiming::default(), KeepaliveLimits::default(), 0);
+        let mut inner = Inner::empty(
+            KeepaliveTiming::default(),
+            KeepaliveLimits::default(),
+            SessionCaps::default(),
+            0,
+        );
         inner.sessions.entries.insert(
             key.clone(),
             Session {
