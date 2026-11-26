@@ -27439,7 +27439,7 @@ await forView('/sessions', async () => {
         // last turns 7 minutes and 3 minutes 30 seconds back (the seed rows `req_c62e9b05-a41` and
         // `req_e07b3c82-d95` in `web/src/mock/requests.ts`), and the failover session (bcc805b6) by its subagent's
         // auxiliary call a minute back (`MOVED_PIN_CALL_ID`). Story 5 (0d588de5) is out by its last turn 25 minutes
-        // back, its pin used 20 seconds back, and the pinless fork (5eeed6ce), quiet for 16 minutes, is out. The rows
+        // back, its pin used 37 seconds back, and the pinless fork (5eeed6ce), quiet for 16 minutes, is out. The rows
         // the ledger holds no turn of read their pin's use, the auxiliary-only session (3e9b7c21) 3 minutes back and
         // the fleet session no mod reports (b7e2d5a9) 2. Laptop's two sessions no mod reports are in by their last
         // turns, c52dbc8e's subagent failover 5 minutes 51 seconds back (`req_2e7c90a1-6d4`) and 4ef130f1's compacted
@@ -30187,7 +30187,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const created = [...m.container.querySelectorAll('dl.facts > .kv__row')].filter((r) => r.querySelector('dt')?.textContent?.trim() === 'Created').map((r) => r.querySelector('dd')?.textContent?.trim() ?? '');
     results.push({ name: '/sessions a session with no first request says so in its Created fact', ok: created.includes('unknown'), missing: [...new Set(created)].slice(0, 4) });
   }
-  expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
+  expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'cache warming off for the session', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
   results.push({ name: '/sessions no reason reads net negative', ok: !m.text().includes('net negative'), missing: [m.text().includes('net negative') ? 'still there' : ''] });
   {

@@ -4316,6 +4316,26 @@ test("a pin reads ended where the mod released its agent and live where the sess
   assert.equal(pins.find((p) => p.sessionId === '7bea4514-4087-4b6a-a410-0dd5cd31cfad' && p.agentId === 'c3a9')?.ended, false, "the written session's c3a9");
 });
 
+// Catches two builders of the mock that date one pin apart: the sessions route keeps a line of a pinned row whose pin
+// the pins route of its key's pool has swept, as a pins route does that dates the pin of a main whose recipe holds no
+// last probe by its last request alone. The case reads the lines that a recipe names, since those pins take one date
+// from two sources: the pins route dates such a pin from its recipe, and the sessions route dates its line from the
+// row. A line that no recipe names takes its own last use in both routes.
+test("each line of a pinned session that a recipe names stands in the pins route of its key's pool", async () => {
+  const s = await pinned;
+  const named = new Set((await s.api.listKeepaliveRecipes()).map(pinOf));
+  const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
+  const lines = s.sessions
+    .filter((x) => x.pinned)
+    .flatMap((row) => row.agentContexts.map((line) => ({ pin: pinOf({ agentId: line.agentId, keyId: row.keyId, model: line.model, sessionId: row.sessionId }), poolId: poolOf.get(row.keyId) })))
+    .filter((line) => named.has(line.pin));
+  const listed = new Map();
+  for (const poolId of new Set(lines.map((line) => line.poolId))) listed.set(poolId, new Set((await s.api.listPoolPins(poolId)).map(pinOf)));
+  // A scope that reads no line would pass on any builder.
+  assert.notEqual(lines.length, 0, 'no line of a pinned session is named by a recipe');
+  assert.deepEqual(lines.filter((line) => !listed.get(line.poolId).has(line.pin)).map((line) => line.pin), []);
+});
+
 // Laptop's session c52dbc8e lists the pin its subagent's failover wrote. Loaded at 04:30, the log holds no pin event of
 // its main, so the route counts nothing for the row.
 const subagentPinned = (loading = loading.then(() => storyAt('2026-09-16T04:30:00.000Z')));

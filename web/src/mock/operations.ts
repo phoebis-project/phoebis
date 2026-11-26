@@ -168,7 +168,9 @@ const sessionSpec: ({
     keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' }, cause: 'overage', subagentHold: 'parked_limit',
     facts: { session: { cwd: '/home/dev/work/billing-service/api', project: '/home/dev/work/billing-service', repository: 'git.example/acme/billing-service', repositoryRoot: '/home/dev/work/billing-service' } },
   },
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', pinnedBy: { requestId: 'req_da52d141-a5a' } },
+  // Its companion mod holds the cache warming off for the session, so the engine keeps no prompt of it and sends no
+  // probe. Main's line reads ended, and the pin that a move of the story wrote stays.
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', cause: 'session_opted_out', pinnedBy: { requestId: 'req_da52d141-a5a' } },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95, cause: 'idle_limit' },
   // Its subagents run Haiku 4.5, which the laptop key's list allows beside the main agent's Sonnet 4.5. Their pin
@@ -776,6 +778,7 @@ const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
   probing: 'retained',
   repeated_cold_probe: 'paused',
   scheduled: 'retained',
+  session_opted_out: 'ended',
   spent: 'held',
   unsupported_shape: 'not_retained',
 };
@@ -855,10 +858,11 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const parkKind = agentState !== 'parked' ? null : cause === 'horizon' ? 'scheduled' : 'background';
     const deadline = agentState === 'parked' && j === 0 && cause !== 'horizon' ? ahead(72 * MINUTE + 30_000) : null;
     const wakeAt = parkKind === 'scheduled' ? ahead(3 * 24 * 60 * MINUTE + 30_000) : null;
-    // An agent whose request still awaits its evidence has not been probed since, a probe in flight was dispatched at
-    // its due time, which the engine records as the last probe, and the rest were probed minutes ago.
+    // An agent whose request still awaits its evidence has not been probed since, the engine probes no agent whose
+    // session holds the cache warming off, a probe in flight was dispatched at its due time, which the engine records
+    // as the last probe, and the rest were probed minutes ago.
     const writtenProbe = fixedAgents?.[j].lastProbeMinutes;
-    const lastProbeAt = writtenProbe !== undefined ? ago(writtenProbe * MINUTE) : cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
+    const lastProbeAt = writtenProbe !== undefined ? ago(writtenProbe * MINUTE) : cause === 'awaiting_cache_evidence' || cause === 'session_opted_out' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
     // A line held for its probe's 429 was scheduled before that probe, so its draw is taken and set aside, and the rows
     // after it keep their rolls. A line held for its pool's answer takes none, since the stream takes no draw at its
@@ -1621,8 +1625,8 @@ const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => {
  * sessions, agents and models as bytes: each line of the rows and each pin the rows list no line for, with none of the
  * sessions route's filters. A pin's mark is its row's where it is the row's display pin, since the story marks no
  * other. The router's sweep takes a pin past the pool's affinity TTL, so a pin that `pinReadAt` reads as swept at `now`
- * is out: its last use is the later of its recipe's last request and last probe, which each renew it, and a line's own
- * last use where no recipe names the pin.
+ * is out: its last use is the later of its recipe's last request and last probe, which each renew it, the last use of
+ * main's own line where its recipe holds no last probe, and a line's own last use where no recipe names the pin.
  */
 export const poolPinsAt = (now: number, sessions: readonly Session[], keyIds: ReadonlySet<string>, ttlMs: number): PoolPin[] => {
   const recipes = new Map(RECIPES.map((r) => [pinKeyFor(r.keyId, r.sessionId, r.agentId, r.model), r]));
@@ -1631,7 +1635,11 @@ export const poolPinsAt = (now: number, sessions: readonly Session[], keyIds: Re
     .flatMap((s) =>
       [...s.agentContexts, ...(UNLISTED_PINS.get(s) ?? [])].flatMap((line): PoolPin[] => {
         const recipe = recipes.get(pinKeyFor(s.keyId, s.sessionId, line.agentId, line.model));
-        const lastUse = recipe !== undefined ? recipeLastUse(recipe) : line.lastUsedAt === null ? null : Date.parse(line.lastUsedAt);
+        // A recipe dates its agent's pin by the later of its last request and its last probe. A main whose recipe
+        // holds no last probe has no probe to renew its pin, so its pin is dated as the sessions route dates its line,
+        // by the row's last use, which stands for a request of the agent that the story's sample of requests can lack.
+        const unprobedMain = recipe !== undefined && line.agentId === 'main' && recipe.lastProbeAt === null;
+        const lastUse = recipe !== undefined && !unprobedMain ? recipeLastUse(recipe) : line.lastUsedAt === null ? null : Date.parse(line.lastUsedAt);
         if (lastUse === null || pinReadAt(lastUse, ttlMs, now) === 'none') return [];
         const mark = line.agentId === s.agentId && line.model === s.model ? s.mark : null;
         return [
