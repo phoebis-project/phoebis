@@ -2,7 +2,7 @@ import { Fragment, type ReactNode, useId, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { Account, ApiKey, BurnFigures, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session, SessionAgentFacts, SessionSpend } from '@/api/types';
+import type { Account, ApiKey, BurnFigures, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session, SessionSpend } from '@/api/types';
 import { LIFECYCLE_VALUES } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { FilterBar } from '@/components/FilterBar';
@@ -890,7 +890,7 @@ function SessionRows({
   const split = Object.entries(row.split).flatMap(([word, n]) => (n > 0 ? [`${fmtInt(n)} ${word}`] : []));
   const relation = forkRelation(baseAccountId, session.pinned ? session.accountId : null);
   // The earlier agents are the ones no line names, a released line hidden by the filters among the named.
-  const earlier = open ? earlierAgents(session, row.lines) : [];
+  const earlier = useMemo(() => (open ? earlierAgents(session, row.lines) : []), [open, row.lines, session]);
   const [earlierOpen, setEarlierOpen] = useState(false);
   const [warmingOpen, setWarmingOpen] = useState(false);
   const tableId = useId();
@@ -902,18 +902,8 @@ function SessionRows({
   const mark = open ? openMark(session) : null;
   const moved = open ? movedWord(session) : null;
   const speed = memberSpeed(session, account, now);
-  const agentRow = (agentId: string, line: SessionLine | null, figures: AgentFigures | null, facts: SessionAgentFacts | null) => (
-    <AgentRow
-      key={line === null ? `earlier|${agentId}` : `${agentId}|${line.model}`}
-      agentId={agentId}
-      cost={cost}
-      facts={facts}
-      figures={figures}
-      line={line}
-      now={now}
-      session={session}
-    />
-  );
+  const lineRow = (line: SessionLine) => <AgentRow key={`${line.agentId}|${line.model}`} agent={line} cost={cost} figures={agentFigures(session, line.agentId)} line={line} now={now} session={session} />;
+  const earlierRow = (agent: EarlierAgent) => <AgentRow key={`earlier|${agent.agentId}`} agent={agent} cost={cost} figures={agent} line={null} now={now} session={session} />;
   return (
     <>
       <tr
@@ -1077,7 +1067,7 @@ function SessionRows({
             end at 1280 px. */}
         <td className="col-fit" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <Menu
-            label={`Actions for session ${label === null ? shortSession : `${label} (${shortSession})`}${session.historical ? ', deleted holder' : ''}`}
+            label={`Actions for session ${withId(label, shortSession)}${session.historical ? ', deleted holder' : ''}`}
             items={[
               ...ledgerItems(session, navigate),
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request and
@@ -1217,8 +1207,8 @@ function SessionRows({
                     </tr>
                   </thead>
                   <tbody>
-                    {[...shownLines, ...(unfolded ? hiddenHere : [])].map((line) => agentRow(line.agentId, line, agentFigures(session, line.agentId), line.facts))}
-                    {(fold === null ? earlierOpen : unfolded) && earlier.map((agent) => agentRow(agent.agentId, null, agent, agent.facts))}
+                    {[...shownLines, ...(unfolded ? hiddenHere : [])].map(lineRow)}
+                    {(fold === null ? earlierOpen : unfolded) && earlier.map(earlierRow)}
                   </tbody>
                 </table>
               </div>
@@ -1296,7 +1286,7 @@ function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agen
       label={plural(agents.length, 'earlier agent')}
       onToggle={onToggle}
       open={open}
-      title={agents.map((a) => agentNamed(a.agentId, a.facts)).join(', ')}
+      title={agents.map((a) => withId(agentLabel(a.agentId, a.facts), a.agentId)).join(', ')}
     />
   );
 }
@@ -1464,12 +1454,9 @@ function LineAccount({ account, bound, children, className = 'agents__account', 
   );
 }
 
-/** An agent as its label with its id behind it, or its id alone where no label stands. Two agents of one session
- *  can report one name or one description, so the id stays behind a label. */
-const agentNamed = (agentId: string, facts: Pick<SessionAgentFacts, 'description' | 'name'> | null): string => {
-  const label = agentLabel(agentId, facts);
-  return label === null ? agentId : `${label} (${agentId})`;
-};
+/** A label with its id behind it, or the id alone where no label stands. Two agents of one session can report one
+ *  name or one description, so the id stays behind an agent's label. */
+const withId = (label: string | null, id: string): string => (label === null ? id : `${label} (${id})`);
 
 /**
  * One row of the Agents table: a line's agent, read off its pin and its recipe, or an earlier agent, which holds no
@@ -1478,18 +1465,16 @@ const agentNamed = (agentId: string, facts: Pick<SessionAgentFacts, 'description
  * the agent.
  */
 function AgentRow({
-  agentId,
+  agent,
   cost,
-  facts,
   figures,
   line,
   now,
   session,
 }: {
-  agentId: string;
+  /** The agent's id and type, and in `facts` what the companion reports of it, null where it reports none. */
+  agent: Pick<SessionLine, 'agentId' | 'agentType' | 'facts'>;
   cost: CostContext;
-  /** What the companion reports of the agent, null where it reports none. */
-  facts: SessionAgentFacts | null;
   /** The agent's entry, null for an agent the ledger holds no row of. */
   figures: AgentFigures | null;
   /** The line the agent draws, null for an earlier agent. */
@@ -1497,6 +1482,7 @@ function AgentRow({
   now: number;
   session: Session;
 }) {
+  const { agentId, facts } = agent;
   const navigate = useNavigate();
   const pin = line?.pin ?? null;
   const recipe = line?.recipe ?? null;
@@ -1509,7 +1495,7 @@ function AgentRow({
   // A line's account is its pin's, and its recipe's only where no pin stands, as the row's "+N" and the Account filter
   // read it.
   const accountId = line === null ? (figures?.accountId ?? null) : lineAccountOf(line);
-  const type = agentId === MAIN_AGENT ? null : line === null ? (figures?.agentType ?? null) : line.agentType;
+  const type = agentId === MAIN_AGENT ? null : agent.agentType;
   const title = joinPresent([lastRequestAt === null ? null : `Last request ${since(lastRequestAt, now)}.`, pin?.pinnedAt ? `Pinned since ${since(pin.pinnedAt, now)}.` : null], ' ');
   const tokens = pin?.lastInputTokens ?? null;
   const context = contextCell(tokens);
@@ -1566,7 +1552,7 @@ function AgentRow({
       </td>
       <td>
         <Menu
-          label={`Actions for agent ${agentNamed(agentId, facts)}`}
+          label={`Actions for agent ${withId(label, agentId)}`}
           items={[
             ...ledgerItems(session, navigate, linked),
             // An hour either side of the agent's last request, read when the item is chosen.
