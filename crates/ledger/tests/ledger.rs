@@ -8075,7 +8075,7 @@ async fn a_pass_under_no_request_retention_cuts_an_expired_title_and_keeps_an_ol
 }
 
 #[tokio::test]
-async fn a_pass_keeps_a_title_whose_stamp_trails_the_expiry_by_one_save_interval() {
+async fn a_pass_keeps_a_title_whose_stamp_lies_inside_the_keep_period() {
     let up = FakeUpstream::start(vec![]).await;
     let config = LedgerConfig {
         purge_interval: Duration::from_millis(200),
@@ -8107,13 +8107,13 @@ async fn a_pass_keeps_a_title_whose_stamp_trails_the_expiry_by_one_save_interval
     assert_eq!(
         harbor_sets(&h, generation, "s1"),
         vec![(FactsKind::Title, String::new(), live.to_string())],
-        "a title whose stamp trails the expiry by one save interval stays inside the grace"
+        "a title whose stamp lies inside the keep period stays"
     );
     up.shutdown().await;
 }
 
 #[tokio::test]
-async fn a_pass_under_an_expiry_that_no_cutoff_can_hold_cuts_no_title() {
+async fn a_pass_under_a_keep_period_that_no_cutoff_can_hold_cuts_no_title() {
     let up = FakeUpstream::start(vec![]).await;
     let config = LedgerConfig {
         purge_interval: Duration::from_millis(200),
@@ -8156,7 +8156,7 @@ async fn a_pass_under_an_expiry_that_no_cutoff_can_hold_cuts_no_title() {
     assert_eq!(
         harbor_sets(&h, generation, "s1"),
         vec![(FactsKind::Title, String::new(), title.to_string())],
-        "an expiry past what an instant can hold keeps the title"
+        "a keep period past what an instant can hold keeps the title"
     );
     up.shutdown().await;
 }
