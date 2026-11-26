@@ -610,6 +610,7 @@ export const SESSIONS_CODEC = codecOf<SessionsAddress>({
   forked: { kind: 'flag', name: 'forked' },
   key: list('key'),
   pool: list('pool'),
+  session: text('session'),
   slowed: { kind: 'flag', name: 'slowed' },
   account: list('account'),
   // A type the companion reports is free text and can hold a comma, which a comma-joined list would split.

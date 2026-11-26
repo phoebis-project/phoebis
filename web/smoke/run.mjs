@@ -18086,7 +18086,7 @@ await forView('/routing-log', async () => {
     });
   }
   {
-    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/routing-log\?models=[^&]+&range=24h$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?search=[^&]+&finished=1$/ };
+    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/routing-log\?models=[^&]+&range=24h$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?finished=1&session=[^&]+$/ };
     const wrong = [];
     const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
     const all = (td, kinds) => hrefs(td).every((h) => kinds.some((k) => ROUTE[k].test(h)));
@@ -18099,7 +18099,7 @@ await forView('/routing-log', async () => {
       // The link opens the Sessions view on the row's own session with Finished sessions on, and its title names that
       // session.
       const own = sessionOf.get(tr.getAttribute('data-row') ?? '');
-      if (session && (session.getAttribute('href') !== `/sessions?search=${own}&finished=1` || own == null || session.getAttribute('title') !== own)) say(`session ${session.getAttribute('href')} ${session.getAttribute('title')} for ${own}`);
+      if (session && (session.getAttribute('href') !== `/sessions?finished=1&session=${own}` || own == null || session.getAttribute('title') !== own)) say(`session ${session.getAttribute('href')} ${session.getAttribute('title')} for ${own}`);
       if (!session && cell(tr, 'session')?.querySelector('.muted')?.textContent !== '-') say('session drawn as text');
       if (!all(cell(tr, 'account'), ['account', 'pool', 'key', 'model'])) say(`account ${hrefs(cell(tr, 'account'))}`);
       const named = [...(cell(tr, 'account')?.querySelectorAll('.routing-log__cut:not(.routing-log__model-under) > :not(.muted)') ?? [])].filter((e) => e.tagName !== 'A');
@@ -18464,7 +18464,7 @@ await forView('/routing-log', async () => {
           values['Shed cap'] === fmtPct(record.settings.shedCap) &&
           JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Session', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
           request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
-          request.Session?.querySelector('a')?.getAttribute('href') === `/sessions?search=${record.request.sessionId}&finished=1` && request.Session?.querySelector('.chip')?.getAttribute('title') === record.request.sessionId && JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
+          request.Session?.querySelector('a')?.getAttribute('href') === `/sessions?finished=1&session=${record.request.sessionId}` && request.Session?.querySelector('.chip')?.getAttribute('title') === record.request.sessionId && JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
           JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twentySix) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
         missing: [JSON.stringify(closed), String(since), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
@@ -18575,7 +18575,7 @@ await forView('/routing-log', async () => {
     const factSession = kvRows(folded).find((r) => r.label === 'Session')?.dd?.querySelector('a');
     results.push({
       name: '/routing-log a move is drawn by the session its pin is keyed by, the row and the card naming it',
-      ok: record.request.sessionId !== null && session?.getAttribute('href') === `/sessions?search=${record.request.sessionId}&finished=1` && session?.getAttribute('title') === record.request.sessionId && factSession?.getAttribute('href') === `/sessions?search=${record.request.sessionId}&finished=1` && factSession?.closest('.chip')?.getAttribute('title') === record.request.sessionId,
+      ok: record.request.sessionId !== null && session?.getAttribute('href') === `/sessions?finished=1&session=${record.request.sessionId}` && session?.getAttribute('title') === record.request.sessionId && factSession?.getAttribute('href') === `/sessions?finished=1&session=${record.request.sessionId}` && factSession?.closest('.chip')?.getAttribute('title') === record.request.sessionId,
       missing: [String(session?.getAttribute('href')), String(factSession?.getAttribute('href')), String(record.request.sessionId)],
     });
     page.unmount();
@@ -18619,7 +18619,7 @@ await forView('/routing-log', async () => {
         (popoverRowOf(fired, 'trigger') ?? []).includes('trigger 5h') && /^excess \d+\.\d\d %\/h$/.test((popoverRowOf(fired, 'excess') ?? [])[0] ?? '') &&
         JSON.stringify(ddWords(mark?.dd)) === JSON.stringify([`marked on ${record.pin.markedOn}`, `at ${new Date(record.pin.markedAt).toISOString().slice(11, 16)}`, 'by the 5h trigger']) &&
         ran?.verdict === 'no' && (popoverRowOf(roundGroup, 'round') ?? []).includes('round ran') && marks.length === sessions.length && sessions.length === 2 &&
-        marks.every((c, n) => c.querySelector('a')?.getAttribute('href') === `/sessions?search=${sessions[n]}&finished=1`) && JSON.stringify(marks.map((c) => c.getAttribute('title')?.split('/')[1])) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
+        marks.every((c, n) => c.querySelector('a')?.getAttribute('href') === `/sessions?finished=1&session=${sessions[n]}`) && JSON.stringify(marks.map((c) => c.getAttribute('title')?.split('/')[1])) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
       missing: [shed ? `${shed.step} ${shed.verdict}: ${rowsRead(fired)}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? rowsRead(roundGroup) : 'no round station', `${marks.length} marks of ${sessions.length}`],
     });
     results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
@@ -27318,6 +27318,31 @@ await forView('/sessions', async () => {
     });
   }
   {
+    // A session link's address lists the rows of that id alone under a chip that shows the id and clears it, so no row
+    // hides without a control to bring it back, and the search field stays empty. The id is the story's finished
+    // session, FINISHED_SESSION_ID of web/src/mock/requests.ts, whose first eight characters the chip prints. The x
+    // leaves Finished sessions on, so the route's 30 rows stand again, the count that the comment above the bare
+    // address works out.
+    const page = await mount(`/sessions?finished=1&session=${finished?.sessionId}`, { now: CLOCK_ORIGIN });
+    const rowsOf = () => [...page.container.querySelectorAll('tbody tr.srow')].map((tr) => tr.id);
+    const linked = { chips: chipsOn(page), rows: rowsOf(), search: barSearch(page)?.value ?? null };
+    await removeChip(page, 'session');
+    const cleared = { address: page.location().search, chips: chipsOn(page), rows: rowsOf().length };
+    page.unmount();
+    results.push({
+      name: "/sessions a session link's address keeps its one row under the chips finished sessions and session, and the session chip's x lists the other rows again",
+      ok:
+        finished !== undefined &&
+        JSON.stringify(linked.chips) === JSON.stringify(['finished sessions', 'session: 9b4e2f71…']) &&
+        JSON.stringify(linked.rows) === JSON.stringify([idOfRow(finished)]) &&
+        linked.search === '' &&
+        JSON.stringify(cleared.chips) === JSON.stringify(['finished sessions']) &&
+        cleared.rows === 30 &&
+        cleared.address === '?finished=1',
+      missing: [`finished ${finished?.sessionId ?? 'absent'}`, JSON.stringify(linked), JSON.stringify(cleared)],
+    });
+  }
+  {
     // Show released agents draws a live session's released lines, each with its released badge, and matches no line, so
     // the count names the bare page's agents, which leave the released ones out.
     const written = recipes.find((r) => r.agentState === 'released' && r.cause === 'agent_released')?.sessionId;
@@ -27386,7 +27411,7 @@ await forView('/sessions', async () => {
       name: '/sessions Add filter offers the Session and Agents filters, and a pick writes the address and its chip',
       ok:
         JSON.stringify(offered) ===
-          JSON.stringify(['Active within', 'Client', 'Companion', 'Finished sessions', 'Forked sessions', 'Key', 'Pool', 'Slowed', 'Account', 'Agent type', 'Cache', 'Effort', 'Model', 'Released agents', 'Status']) &&
+          JSON.stringify(['Active within', 'Client', 'Companion', 'Finished sessions', 'Forked sessions', 'Key', 'Pool', 'Session', 'Slowed', 'Account', 'Agent type', 'Cache', 'Effort', 'Model', 'Released agents', 'Status']) &&
         picked.search === '?released=1' &&
         JSON.stringify(picked.chips) === JSON.stringify(['released agents']),
       missing: [JSON.stringify(offered), JSON.stringify(picked)],

@@ -320,7 +320,7 @@ test('earlierAgents lists the agents with ledgered requests that no line names, 
 });
 
 /** Every filter off, as the address reads with none set. */
-const NO_FILTERS = { account: [], active: '', agentType: [], cache: [], client: [], companion: [], effort: [], finished: false, forked: false, key: [], model: [], pool: [], released: false, search: '', slowed: false, status: [] };
+const NO_FILTERS = { account: [], active: '', agentType: [], cache: [], client: [], companion: [], effort: [], finished: false, forked: false, key: [], model: [], pool: [], released: false, search: '', session: '', slowed: false, status: [] };
 /** A drawn line with the two members the Model and Status filters read. */
 const matchLine = (agentId, model, lifecycle) => ({ agentId, agentType: null, lifecycle, model, pin: null, recipe: null });
 const matchSession = { agentRequests: [], companion: 'reporting', forkedFrom: null, historical: false, keyGeneration: 1, keyId: 'desktop', lastRequestAt: iso(ms(14, 20)), lastUsedAt: iso(ms(14, 20)), sessionId: 'session-1', speed: null, userAgent: null };
@@ -374,6 +374,11 @@ test('matches searches the id by its start and the reported facts by a word, wha
   assert.equal(found({ facts: { ...NO_FACTS, repositoryRoot: '/home/u/work/gateway' } }, 'GATE'), true, 'the end of the repository root');
   assert.equal(found({ sessionId: 'b2c4d6' }, 'b2'), true, "the id's start");
   assert.equal(found({ sessionId: 'a7b2c4' }, 'b2'), false, 'the id past its start');
+});
+
+test('matches keeps the one row whose id is the session key, whole, where the search would keep three', () => {
+  const kept = (session) => d.matches({ finished: false, lines: [], poolId: 'all', session: { ...matchSession, facts: NO_FACTS, ...session } }, { ...NO_FILTERS, session: 'build' }, NOW);
+  assert.deepEqual([kept({ sessionId: 'build' }), kept({ sessionId: 'build-2' }), kept({ facts: { ...NO_FACTS, title: 'build' }, sessionId: 'c7' })], [true, false, false]);
 });
 
 test('hiddenLines counts the lines the Agents filters hide and the earlier agents', () => {

@@ -968,7 +968,7 @@ test("the pin's three groups hold their keys and the fired shed line reads its t
   assert.equal(marks.chips.length, round.outcome.shedMarks.length);
   // A mark's link opens the Sessions view on the mark's own session with Finished sessions on, and its title names that
   // session.
-  assert.deepEqual(marks.chips.map((c) => [c.label, c.href, c.title.split('/')[1]]), round.outcome.shedMarks.map((mk) => ['mark', `/sessions?search=${mk.sessionId}&finished=1`, mk.sessionId]));
+  assert.deepEqual(marks.chips.map((c) => [c.label, c.href, c.title.split('/')[1]]), round.outcome.shedMarks.map((mk) => ['mark', `/sessions?finished=1&session=${mk.sessionId}`, mk.sessionId]));
   // A pool with the slow-down off says so on every shed line, and a line that names a trigger names its source.
   for (const record of [shedMove, round]) {
     const keys = record.walk.find((s) => s.step === 'move:shed').facts.map((f) => [f.key, f.value]);
@@ -978,13 +978,13 @@ test("the pin's three groups hold their keys and the fired shed line reads its t
   const skipped = (await recordOf('req_6e1f3b98-a24/1'));
   const rows = stationPlan(skipped, 'move:shed').block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'skipped');
   assert.deepEqual(rows.chips.map((c) => [c.value, c.href]), [
-    ['bcc805b6: unpriced', '/sessions?search=bcc805b6-0588-4fe4-ac9e-62a13a0f6e99&finished=1'],
-    ['d7167642: no runway', '/sessions?search=d7167642-751d-475e-b0bf-2f24fe70245e&finished=1'],
-    ['4ef130f1: no runway', '/sessions?search=4ef130f1-90e0-46e3-9a3c-4a000fe854f1&finished=1'],
-    ['0d588de5: unpriced', '/sessions?search=0d588de5-a77c-49ed-a40e-5dcb9d4f7fba&finished=1'],
-    ['d6f1a3c8: unpriced', '/sessions?search=d6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64&finished=1'],
-    ['d7167642: fast lane', '/sessions?search=d7167642-751d-475e-b0bf-2f24fe70245e&finished=1'],
-    ['3c36d663: ended', '/sessions?search=3c36d663-d074-42f6-8738-f54da7c9f026&finished=1'],
+    ['bcc805b6: unpriced', '/sessions?finished=1&session=bcc805b6-0588-4fe4-ac9e-62a13a0f6e99'],
+    ['d7167642: no runway', '/sessions?finished=1&session=d7167642-751d-475e-b0bf-2f24fe70245e'],
+    ['4ef130f1: no runway', '/sessions?finished=1&session=4ef130f1-90e0-46e3-9a3c-4a000fe854f1'],
+    ['0d588de5: unpriced', '/sessions?finished=1&session=0d588de5-a77c-49ed-a40e-5dcb9d4f7fba'],
+    ['d6f1a3c8: unpriced', '/sessions?finished=1&session=d6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64'],
+    ['d7167642: fast lane', '/sessions?finished=1&session=d7167642-751d-475e-b0bf-2f24fe70245e'],
+    ['3c36d663: ended', '/sessions?finished=1&session=3c36d663-d074-42f6-8738-f54da7c9f026'],
   ]);
 });
 

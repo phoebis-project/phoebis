@@ -795,7 +795,7 @@ export function entityHref(kind: FactEntity['kind'] | 'request' | 'session', id:
       return logHref({ models: [id], range: '24h' });
     // Finished sessions is on so a finished session's row is not hidden behind its own link.
     case 'session':
-      return `/sessions?${SESSIONS_CODEC.toParams({ ...SESSIONS_CODEC.defaults, finished: true, search: id })}`;
+      return `/sessions?${SESSIONS_CODEC.toParams({ ...SESSIONS_CODEC.defaults, finished: true, session: id })}`;
   }
 }
 

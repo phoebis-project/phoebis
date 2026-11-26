@@ -189,7 +189,7 @@ const USER_AGENT: Dimension = { field: 'agent', group: 'Request', kind: 'pattern
 export const AGENT_ID: Dimension = { field: 'agentId', group: 'Subject', kind: 'id', label: 'Agent', mono: true, word: 'agent' };
 /** A request's id, which both logs offer. */
 const REQUEST_ID: Dimension = { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' };
-/** A request's session id, which both logs and Analytics offer. */
+/** A session id, which Analytics, both logs and the Sessions view offer. */
 const SESSION_ID: Dimension = { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' };
 /** The status choice Accounts lists under its own group and Keys spreads under the Keys group. */
 const STATUS: Dimension = { anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Accounts', kind: 'choice', label: 'Status', word: 'status' };
@@ -334,6 +334,7 @@ export const SESSIONS_DIMENSIONS: Dimension[] = [
   { field: 'forked', group: 'Session', kind: 'flag', label: 'Forked sessions', word: 'forked sessions' },
   { field: 'key', group: 'Session', kind: 'list', label: 'Key', mono: true, word: 'key' },
   { field: 'pool', group: 'Session', kind: 'list', label: 'Pool', mono: true, word: 'pool' },
+  { ...SESSION_ID, group: 'Session' },
   { field: 'slowed', group: 'Session', kind: 'flag', label: 'Slowed', word: 'slowed' },
   { field: 'account', group: 'Agents', kind: 'list', label: 'Account', suffix: ANY_AGENT, word: 'account' },
   { field: 'agentType', group: 'Agents', kind: 'list', label: 'Agent type', mono: true, suffix: ANY_AGENT, word: 'agent type' },

@@ -539,6 +539,8 @@ export interface SessionFilters {
   released: boolean;
   /** A session id's prefix, or a part of a fact the session's companion reports, whatever the case. */
   search: string;
+  /** A session id, matched whole. Empty for none. */
+  session: string;
   slowed: boolean;
   /** The lifecycle words, `released`, `unknown` and `unreported` among them. */
   status: string[];
@@ -627,13 +629,15 @@ function searchFinds(session: Pick<Session, 'facts' | 'sessionId'>, search: stri
 /**
  * The row passes every Session filter and, where an Agents filter stands, one of the lines it draws passes them all. A
  * finished row is out unless `finished` stands. The search matches the id's start or a part of a reported fact,
- * whatever its case. Key reads the Requests view's selectors: `id@generation` names one lifetime and a bare id the live
- * key's rows, so an earlier holder's rows answer to their own lifetime alone.
+ * whatever its case. The session key keeps the row whose id it is, matched whole. Key reads the Requests view's
+ * selectors: `id@generation` names one lifetime and a bare id the live key's rows, so an earlier holder's rows answer
+ * to their own lifetime alone.
  */
 export function matches(row: MatchRow, filters: SessionFilters, now: number): boolean {
   const { session } = row;
   if (row.finished && !filters.finished) return false;
   if (filters.search !== '' && !searchFinds(session, filters.search)) return false;
+  if (filters.session !== '' && session.sessionId !== filters.session) return false;
   const active = ACTIVE_WITHIN.find((a) => a.id === filters.active);
   if (active !== undefined && !activeWithin(session, active.ms, now)) return false;
   if (misses(filters.client, clientVersion(session.userAgent)) || misses(filters.companion, session.companion) || misses(filters.pool, row.poolId)) return false;

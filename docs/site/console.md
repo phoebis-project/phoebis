@@ -1486,29 +1486,30 @@ slot keeps the width of a count with three digits in each figure. The search fie
 a part of the title, the project path, the working directory, the repository, the repository's root or the branch its
 companion reports, whatever the case. It reads no agent's fact: the Agent type filter reads an agent's type, and no
 filter reads its description or its name. Add filter opens a "Filter by" field over two groups: Session, which reads the
-row (Active within, Client, Companion, Finished sessions, Forked sessions, Key, Pool and Slowed), and Agents, which
-reads each agent line, main's among them (Account, Agent type, Cache, Effort, Model, Released agents and Status).
+row (Active within, Client, Companion, Finished sessions, Forked sessions, Key, Pool, Session and Slowed), and Agents,
+which reads each agent line, main's among them (Account, Agent type, Cache, Effort, Model, Released agents and Status).
 Filters are AND: a session is listed when it passes every Session filter and, while Agents filters stand, when one of
 its lines passes every Agents filter together. A finished session, one whose main agent ended with the session or whose
 every agent the mod released, stays out unless Finished sessions stands, and Released agents draws a live session's
 released agents, which stay hidden without it. Status reads each line's word as the Agents table draws it, so main's
-line of a session no mod reports matches `unreported`. The router lists a companion session within the session expiry,
-which for such a session counts from the later of its last request and its mod's last report, so its row stays while the
-mod reports, and a session no mod reports while the latest of its last use, its last request and, where its companion
-ended the session, that end is within the lesser of the non-companion timeout of the Settings page
-(`sessions.non_companion_idle_seconds`, 1h by default) and the session expiry, and the view reads that list as it is.
-Each filter off its default stands as a chip on a line under the bar: a click on the chip opens its values again, its x
-removes it, and from two chips on "Clear all" returns every filter to its default. An Agents filter's chip reads
-`(any agent)` after its values in the secondary ink, its hover ending "matched by any one agent". The filters live in
-the page's address, so a reload or a shared link keeps them, and a bare `/sessions` reads the defaults. Where a read the
-rows wait on failed before it answered, the sessions, the recipes or the keys, a line under the bar names it,
-`Could not load the {read}: {reason}`, with Try again, and a failed accounts read draws a line of its own. The head
-under the bar reads "Every session the router lists: what it runs, where it is pinned, what it has spent and whether its
-prompt cache is warm." with the disclosure "How pins and recipes work", whose paragraph says what a pin and a recipe
-are, and a "Cost reference" link that opens the dialog on Plan rates. Auto reload starts at 5 s and reads the accounts,
-the recipes and the sessions at that one interval, and it waits while the Cost reference dialog, a row's menu or a
-popover of the bar is open. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under
-[The mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
+line of a session no mod reports matches `unreported`. Session keeps the rows of one session id, matched whole. The
+router lists a companion session within the session expiry, which for such a session counts from the later of its last
+request and its mod's last report, so its row stays while the mod reports, and a session no mod reports while the latest
+of its last use, its last request and, where its companion ended the session, that end is within the lesser of the
+non-companion timeout of the Settings page (`sessions.non_companion_idle_seconds`, 1h by default) and the session
+expiry, and the view reads that list as it is. Each filter off its default stands as a chip on a line under the bar: a
+click on the chip opens its values again, its x removes it, and from two chips on "Clear all" returns every filter to
+its default. An Agents filter's chip reads `(any agent)` after its values in the secondary ink, its hover ending
+"matched by any one agent". The filters live in the page's address, so a reload or a shared link keeps them, and a bare
+`/sessions` reads the defaults. Where a read the rows wait on failed before it answered, the sessions, the recipes or
+the keys, a line under the bar names it, `Could not load the {read}: {reason}`, with Try again, and a failed accounts
+read draws a line of its own. The head under the bar reads "Every session the router lists: what it runs, where it is
+pinned, what it has spent and whether its prompt cache is warm." with the disclosure "How pins and recipes work", whose
+paragraph says what a pin and a recipe are, and a "Cost reference" link that opens the dialog on Plan rates. Auto reload
+starts at 5 s and reads the accounts, the recipes and the sessions at that one interval, and it waits while the Cost
+reference dialog, a row's menu or a popover of the bar is open. The probes and the recipe are explained on
+[Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod) and the recipe's states under
+[The five states](keepalive.md#the-five-states).
 
 The card "Sessions", its title carrying "One row per session. Open a row for its agents, its routing and its cache
 warming." on hover, offers "Expand all" or "Collapse all", and its summary line reads the rows the filters keep: `{k}
@@ -1845,30 +1846,30 @@ each read refreshing the rows inside it.
 
 A row reads Time (dated as on the Requests view, a decision's request beneath it as a link to the request's drawer),
 Kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), Session
-(the first eight characters, a link that opens the Sessions view on that session with Finished sessions on, with the
-agent beneath), Account (a move names the account it left and the one it landed on, and a registry change the pool, the
-key or the account it edited), Model, By, Fact, and Details, which opens the request's drawer. By names what decided the
-row in one chip: the rule that fired (`spent rule`), the rung that placed it (`static rung`), the strategy and the
-tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold waited (`cohort`, `session pin`), `slow-down`
-for a request the slow-down held and for the renewal after its hold, `rewrite in flight` for a request that waited for a
-moved pin's first head and for the renewal after it, what exhausted the pool (`budget`, `cooldown`, `fast lane`,
-`spend cap`), the refusal (`client contract`, `client drift`, `guardrail blocked`, `key revoked`), `no rule fired` for a
-renewal and `keepalive` for a probe's renewal, or an event's reason (`poll on Fable` or `prediction on 5h` for a spent
-window, by the source that read it, `poll`, `head` or `prediction`, and `on 5h` where the row names none, a cooldown's
-`429 on 5h` by the window it names, `429 retry-after`, `fast lane 429` or a bare `429`, `404 on {model}` for a model's
-rejection and `403 on {model}` for its permission error, a cleared mark's reason, `healed`, `moved` or `released`, a
-failed poll's status or `transport failure`, a cut stream's code without its `stream_` stem, `cut`, `incomplete`,
-`stalled` or `undecodable`, `slow-down` for a slow-down's start and end, `5h cleared` for a window read under its limit
-again, with the whole `5h cleared to 40% under its reset` on hover). Fact gives the value that made it so as a muted
-label with its value, `gap`, `idle`, `prefix`, `until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's
-`held 42 s`, a slow-down start's `speed 0.5x` and an end's `slowest 0.35x`, a move's `runway` on its destination (a span
-such as `2 h 10 min`, `none` or `unbounded`) followed by `least bad` or `rewrite only` where the destination did not
-fit, or a renewal's window utilization, such as `5h 96%`, where that window's projection reached its ceiling, or the
-wall where the round tested it. A verdict reads in one color across the rows, the card and the strip: good when it
-served the request, warning when it changed its course, critical for a refusal or an exhaustion, and neutral for none
-and no. Every account, key, pool, model, session and request a row names is a link. Each column but Time keeps a set
-width and Time takes the rest of the card, so on a wide screen the request id under the time reads whole, and a window
-narrower than the columns' total scrolls the table inside its card.
+(the first eight characters, a link that opens the Sessions view on that session alone, under a chip `session` and with
+Finished sessions on, with the agent beneath), Account (a move names the account it left and the one it landed on, and a
+registry change the pool, the key or the account it edited), Model, By, Fact, and Details, which opens the request's
+drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that placed it
+(`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold waited
+(`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold,
+`rewrite in flight` for a request that waited for a moved pin's first head and for the renewal after it, what exhausted
+the pool (`budget`, `cooldown`, `fast lane`, `spend cap`), the refusal (`client contract`, `client drift`,
+`guardrail blocked`, `key revoked`), `no rule fired` for a renewal and `keepalive` for a probe's renewal, or an event's
+reason (`poll on Fable` or `prediction on 5h` for a spent window, by the source that read it, `poll`, `head` or
+`prediction`, and `on 5h` where the row names none, a cooldown's `429 on 5h` by the window it names, `429 retry-after`,
+`fast lane 429` or a bare `429`, `404 on {model}` for a model's rejection and `403 on {model}` for its permission error,
+a cleared mark's reason, `healed`, `moved` or `released`, a failed poll's status or `transport failure`, a cut stream's
+code without its `stream_` stem, `cut`, `incomplete`, `stalled` or `undecodable`, `slow-down` for a slow-down's start
+and end, `5h cleared` for a window read under its limit again, with the whole `5h cleared to 40% under its reset` on
+hover). Fact gives the value that made it so as a muted label with its value, `gap`, `idle`, `prefix`, `until`, a held
+request's `until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x` and an end's
+`slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`) followed by
+`least bad` or `rewrite only` where the destination did not fit, or a renewal's window utilization, such as `5h 96%`,
+where that window's projection reached its ceiling, or the wall where the round tested it. A verdict reads in one color
+across the rows, the card and the strip: good when it served the request, warning when it changed its course, critical
+for a refusal or an exhaustion, and neutral for none and no. Every account, key, pool, model, session and request a row
+names is a link. Each column but Time keeps a set width and Time takes the rest of the card, so on a wide screen the
+request id under the time reads whole, and a window narrower than the columns' total scrolls the table inside its card.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",
