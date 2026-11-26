@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::sessions::state::{Agent, SessionKey};
+use crate::sessions::state::{agent_ref, Agent, SessionKey, SessionsState, AGENT_HELD};
 use crate::warming::causes::{Reason, Wasted};
 use crate::warming::config::KeepaliveTiming;
 use crate::warming::guard::Guard;
@@ -321,4 +321,28 @@ pub(crate) fn warming_ref<'a>(
     agent_id: &str,
 ) -> Option<&'a AgentWarming> {
     agents.get(key)?.get(agent_id)
+}
+
+/// `warming_mut` for an agent the session engine holds, `None` for one it does not. Both records of an agent are made
+/// and dropped in the same hold, so a held agent without the warming's record panics. The session state is borrowed
+/// shared, since no function of the warming writes the session engine's state.
+pub(crate) fn warming_if_held_mut<'a>(
+    agents: &'a mut BTreeMap<SessionKey, BTreeMap<String, AgentWarming>>,
+    sessions: &SessionsState,
+    key: &SessionKey,
+    agent_id: &str,
+) -> Option<&'a mut AgentWarming> {
+    agent_ref(&sessions.entries, key, agent_id)?;
+    Some(warming_mut(agents, key, agent_id).expect(AGENT_HELD))
+}
+
+/// `warming_if_held_mut`'s shared twin.
+pub(crate) fn warming_if_held_ref<'a>(
+    agents: &'a BTreeMap<SessionKey, BTreeMap<String, AgentWarming>>,
+    sessions: &SessionsState,
+    key: &SessionKey,
+    agent_id: &str,
+) -> Option<&'a AgentWarming> {
+    agent_ref(&sessions.entries, key, agent_id)?;
+    Some(warming_ref(agents, key, agent_id).expect(AGENT_HELD))
 }

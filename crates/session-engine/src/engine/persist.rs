@@ -109,11 +109,7 @@ impl Snapshot {
 
 /// An agent read back from its two rows: the session engine's record, the warming's, and the observation's fields
 /// with its client label when the warming's row carried a recipe.
-type Decoded = (
-    Agent,
-    AgentWarming,
-    Option<(PersistedObservation, Option<String>)>,
-);
+type Decoded = (Agent, AgentWarming, Option<PersistedObservation>);
 
 /// An agent's two rows as the store answered them, either one absent.
 #[derive(Default)]
@@ -130,7 +126,7 @@ fn decode_agent(
     timing: KeepaliveTiming,
 ) -> Option<Decoded> {
     let agent = crate::sessions::persist::decode_agent(agent_row)?;
-    let (warming, observation) = decode_warming(warming_row, agent.last_activity, timing)?;
+    let (warming, observation) = decode_warming(warming_row, timing)?;
     Some((agent, warming, observation))
 }
 
@@ -639,8 +635,8 @@ impl Inner {
                 // The observation's restore reads the row's other columns alone, so the opened prompt moves out.
                 match (observation, warming_row.body.take()) {
                     (None, _) => {}
-                    (Some((observation, client_label)), Some(body)) => {
-                        match observation.restore(&warming_row, body, client_label) {
+                    (Some(observation), Some(body)) => {
+                        match observation.restore(&warming_row, body) {
                             Some(observation) => held.push((
                                 warming_row.updated_at,
                                 key.clone(),

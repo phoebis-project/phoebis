@@ -18,7 +18,7 @@ use crate::engine::Engine;
 use crate::sessions::state::{
     agent_ref, Agent, AgentState, SessionKey, SessionsState, AGENT_HELD, MAIN_AGENT,
 };
-use crate::warming::agent::{warming_mut, warming_ref};
+use crate::warming::agent::{warming_if_held_mut, warming_mut, warming_ref};
 use crate::warming::breakeven::Ceilings;
 use crate::warming::causes::{Reason, Wasted};
 use crate::warming::gate::Verdict;
@@ -677,9 +677,7 @@ impl WarmingState {
         reason: Reason,
     ) -> Changes {
         let changes = self.set_reason(sessions, key, agent_id, reason);
-        if let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-        {
+        if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) {
             warming.pause();
         }
         changes

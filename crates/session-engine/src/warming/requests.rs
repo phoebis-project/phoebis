@@ -9,8 +9,10 @@ use phoebis_bus::{
 };
 use phoebis_routing::{PinUsage, RegistrySnapshot};
 
-use crate::sessions::state::{agent_ref, SessionKey, SessionsState, AGENT_HELD, MAIN_AGENT};
-use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
+use crate::sessions::state::{SessionKey, SessionsState, AGENT_HELD, MAIN_AGENT};
+use crate::warming::agent::{
+    warming_if_held_mut, warming_if_held_ref, warming_mut, warming_ref, AgentWarming,
+};
 use crate::warming::causes::{Reason, Wasted};
 use crate::warming::config::ONE_HOUR_MS;
 use crate::warming::guard::{class_guard, guard, Guard};
@@ -241,9 +243,7 @@ impl WarmingState {
         if !refreshing || observed.client.context_compacted.is_some() {
             return;
         }
-        let Some(warming) = agent_ref(&sessions.entries, key, MAIN_AGENT)
-            .map(|_| warming_ref(&self.agents, key, MAIN_AGENT).expect(AGENT_HELD))
-        else {
+        let Some(warming) = warming_if_held_ref(&self.agents, sessions, key, MAIN_AGENT) else {
             return;
         };
         let (Some(anchor), Some(previous_prompt)) =
@@ -610,9 +610,7 @@ impl WarmingState {
             return (changes, None);
         };
         let live = sessions.live(&key, &agent_id);
-        let Some(warming) = agent_ref(&sessions.entries, &key, &agent_id)
-            .map(|_| warming_mut(&mut self.agents, &key, &agent_id).expect(AGENT_HELD))
-        else {
+        let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, &key, &agent_id) else {
             return (changes, None);
         };
         let Some(compaction) = warming
@@ -724,9 +722,7 @@ impl WarmingState {
             // carries none takes `expired`, which the lapse sweep settles it under when its chain's last entry ends if
             // no turn reads it first, as its recipe's own lapse would have. The sweep reads that chain through the
             // restored recipe's probes, so a kept probe whose entry they read back waits for the turn that reads them.
-            if let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-                .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-            {
+            if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) {
                 for kept in warming
                     .kept
                     .iter_mut()
@@ -790,17 +786,14 @@ impl WarmingState {
         };
         // Set once the credit has read its gap from the turn before, so the next request's gap runs from this one.
         if (200..300).contains(&complete.status) {
-            if let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-                .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-            {
+            if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) {
                 if let Some(request_started) = warming.current.as_ref().map(|o| o.started) {
                     warming.last_answered_at = Some(request_started);
                 }
             }
         }
         changes.append(self.decide_unanswered(sessions, key, agent_id, read));
-        let (ready, armed) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_ref(&self.agents, key, agent_id).expect(AGENT_HELD))
+        let (ready, armed) = warming_if_held_ref(&self.agents, sessions, key, agent_id)
             .map(|a| {
                 (
                     a.current.as_ref().is_some_and(|o| o.ready),
@@ -813,17 +806,19 @@ impl WarmingState {
                 changes.append(self.observe_usage(sessions, key, agent_id, usage));
             }
         }
-        let (proved, observed_ttl, poisoned, current) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_ref(&self.agents, key, agent_id).expect(AGENT_HELD))
-            .map_or((false, 0, false, None), |a| {
-                let o = a.current.as_ref();
-                (
-                    o.is_some_and(|o| o.ready && o.expected > 0),
-                    o.map_or(0, |o| o.ttl_ms),
-                    o.is_some_and(|o| o.poisoned),
-                    Some(a.reason),
-                )
-            });
+        let (proved, observed_ttl, poisoned, current) =
+            warming_if_held_ref(&self.agents, sessions, key, agent_id).map_or(
+                (false, 0, false, None),
+                |a| {
+                    let o = a.current.as_ref();
+                    (
+                        o.is_some_and(|o| o.ready && o.expected > 0),
+                        o.map_or(0, |o| o.ttl_ms),
+                        o.is_some_and(|o| o.poisoned),
+                        Some(a.reason),
+                    )
+                },
+            );
         // The TTL this request's own evidence settled on, set at a stream's first event or, for an answer without a
         // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
         // below clears the observation.
@@ -859,9 +854,7 @@ impl WarmingState {
             }
         }
         if credit.is_some() {
-            if let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-                .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-            {
+            if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) {
                 warming.count_credit(now);
             }
         }
@@ -893,9 +886,7 @@ impl WarmingState {
         key: &SessionKey,
         prompt: u64,
     ) {
-        if let Some(warming) = agent_ref(&sessions.entries, key, MAIN_AGENT)
-            .map(|_| warming_mut(&mut self.agents, key, MAIN_AGENT).expect(AGENT_HELD))
-        {
+        if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, MAIN_AGENT) {
             warming.last_prompt_tokens = Some(prompt);
         }
     }
@@ -911,8 +902,7 @@ impl WarmingState {
         for (key, agent_id) in open {
             // The lost events may have been this turn's completion, so it counts as the turn that answered, as a
             // missed one does at the next arrival.
-            if let Some(warming) = agent_ref(&sessions.entries, &key, &agent_id)
-                .map(|_| warming_mut(&mut self.agents, &key, &agent_id).expect(AGENT_HELD))
+            if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, &key, &agent_id)
             {
                 if let Some(started) = warming.current.as_ref().map(|o| o.started) {
                     warming.last_answered_at = Some(started);

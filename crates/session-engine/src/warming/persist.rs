@@ -164,6 +164,10 @@ pub(crate) struct PersistedObservation {
     #[serde(default)]
     pub usage_based: bool,
     pub in_overage: bool,
+    /// Saved at the payload's top level as `PersistedWarming::client_label`, which `PersistedWarming::restore` copies
+    /// in here.
+    #[serde(skip)]
+    pub client_label: Option<String>,
 }
 
 /// The recipe's fields beside the prompt and its header block: the hijack guard reads the two hashes, and the probe's
@@ -361,7 +365,7 @@ fn window_of(window: Option<String>) -> Option<&'static str> {
 }
 
 /// A warming row read back: the record, and its observation's fields with its client label when it carried a recipe.
-pub(crate) type Restored = (AgentWarming, Option<(PersistedObservation, Option<String>)>);
+pub(crate) type Restored = (AgentWarming, Option<PersistedObservation>);
 
 impl PersistedWarming {
     fn of(warming: &AgentWarming) -> PersistedWarming {
@@ -412,6 +416,7 @@ impl PersistedWarming {
                 kind: o.funding.kind.map(|kind| kind.as_str().to_string()),
                 usage_based: o.funding.usage_based,
                 in_overage: o.funding.in_overage,
+                client_label: None,
             }),
             expires: warming.expires,
             jitter_frac: warming.jitter_frac,
@@ -478,10 +483,9 @@ impl PersistedWarming {
     /// The warming's record the payload describes, without its observation, and the observation's own fields apart
     /// with its client label, since the recipe they ride on comes from the row's columns. `None` when a word in the
     /// payload is one this build does not know. The timing is the engine's, the binary's fixed numbers, which the build
-    /// a restart brings may have changed. `now` reaches no restored member, since the payload carries both members that
-    /// it fills.
-    fn restore(self, now: i64, timing: KeepaliveTiming) -> Option<Restored> {
-        let mut warming = AgentWarming::new(now, timing);
+    /// a restart brings may have changed.
+    fn restore(self, timing: KeepaliveTiming) -> Option<Restored> {
+        let mut warming = AgentWarming::new(self.cache_started, timing);
         warming.key_generation = self.key_generation;
         warming.idle_episode = self.idle_episode.map(|episode| IdleEpisode {
             started: episode.started,
@@ -501,7 +505,6 @@ impl PersistedWarming {
         warming.expires = self.expires;
         warming.jitter_frac = self.jitter_frac;
         warming.retry_at = self.retry_at;
-        warming.cache_started = self.cache_started;
         warming.ttl_ms = self.ttl_ms;
         warming.cold = self.cold;
         warming.failures = self.failures;
@@ -557,7 +560,10 @@ impl PersistedWarming {
         warming.probes_today = self.probes_today;
         warming.credited_today = self.credited_today;
         warming.counters_day = self.counters_day;
-        let current = self.current.map(|current| (current, self.client_label));
+        let current = self.current.map(|current| PersistedObservation {
+            client_label: self.client_label,
+            ..current
+        });
         Some((warming, current))
     }
 }
@@ -565,12 +571,7 @@ impl PersistedWarming {
 impl PersistedObservation {
     /// The observation over the recipe the row's columns carry: the opened prompt, the header block, the size, the
     /// speed and the dispatch TTL.
-    pub(crate) fn restore(
-        self,
-        row: &KeepaliveAgentRow,
-        body: Vec<u8>,
-        client_label: Option<String>,
-    ) -> Option<Observation> {
+    pub(crate) fn restore(self, row: &KeepaliveAgentRow, body: Vec<u8>) -> Option<Observation> {
         let headers: Vec<(String, String)> = serde_json::from_str(&row.headers).ok()?;
         let prior = match self.prior {
             None => None,
@@ -614,7 +615,7 @@ impl PersistedObservation {
                 usage_based: self.usage_based,
                 in_overage: self.in_overage,
             },
-            client_label,
+            client_label: self.client_label,
         })
     }
 }
@@ -658,13 +659,9 @@ pub(crate) fn agent_row(
 
 /// The warming's record a row describes, `None` when its version or a word in its payload is one this build does not
 /// read.
-pub(crate) fn decode_warming(
-    row: &KeepaliveAgentRow,
-    now: i64,
-    timing: KeepaliveTiming,
-) -> Option<Restored> {
+pub(crate) fn decode_warming(row: &KeepaliveAgentRow, timing: KeepaliveTiming) -> Option<Restored> {
     versioned::<PersistedWarming>(row.record_version, WARMING_RECORD_VERSION, &row.payload)
-        .and_then(|payload| payload.restore(now, timing))
+        .and_then(|payload| payload.restore(timing))
 }
 
 /// What the load left out to stay within the limits the file sets now, for the one line each limit logs.
@@ -772,7 +769,7 @@ impl WarmingState {
         tally.agents += 1;
         if row.body_size > 0 {
             tally.recipes += 1;
-            *self.reasons.entry(Reason::Evicted).or_default() += 1;
+            self.count(Reason::Evicted);
         }
         let Some(mut warming) = warming else {
             return;
@@ -820,7 +817,7 @@ mod tests {
             serde_json::from_value(before).expect("a payload saved before the member loads");
         assert_eq!(loaded.entrypoint, None);
         let (restored, _) = loaded
-            .restore(0, KeepaliveTiming::default())
+            .restore(KeepaliveTiming::default())
             .expect("every word of the payload is known");
         assert_eq!(
             restored.entrypoint, None,
@@ -862,7 +859,7 @@ mod tests {
         let window_of_restored = |payload: serde_json::Value| {
             serde_json::from_value::<PersistedWarming>(payload)
                 .expect("the payload loads")
-                .restore(0, KeepaliveTiming::default())
+                .restore(KeepaliveTiming::default())
                 .map(|(warming, _)| warming.unanswered[0].window)
         };
         assert_eq!(

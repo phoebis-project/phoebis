@@ -7,8 +7,8 @@ use phoebis_bus::user_agent_of;
 use phoebis_ledger::Band;
 use phoebis_routing::SEVEN_DAY;
 
-use crate::sessions::state::{agent_ref, AgentState, SessionKey, SessionsState, AGENT_HELD};
-use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
+use crate::sessions::state::{AgentState, SessionKey, SessionsState, AGENT_HELD};
+use crate::warming::agent::{warming_if_held_mut, warming_mut, warming_ref, AgentWarming};
 use crate::warming::causes::{Reason, Wasted};
 use crate::warming::config::floor_ttl_ms;
 use crate::warming::recipe::Recipe;
@@ -491,17 +491,15 @@ impl WarmingState {
         reason: Reason,
     ) -> Changes {
         let mut changes = Changes::default();
-        if let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-        {
+        if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) {
             warming.reason = reason;
         }
-        *self.reasons.entry(reason).or_default() += 1;
+        self.count(reason);
         changes.agent_row(key, agent_id);
         changes
     }
 
-    /// Counts one cause that no agent's reason takes.
+    /// Counts one cause: an agent's reason as `set_reason` writes it, or one that no agent's reason takes.
     pub(crate) fn count(&mut self, reason: Reason) {
         *self.reasons.entry(reason).or_default() += 1;
     }
@@ -601,8 +599,7 @@ impl WarmingState {
         agent_id: &str,
         now: i64,
     ) -> Changes {
-        let aside = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
+        let aside = warming_if_held_mut(&mut self.agents, sessions, key, agent_id)
             .filter(|warming| {
                 !warming.paused && warming.expires.is_some_and(|expires| expires > now)
             })
@@ -629,9 +626,7 @@ impl WarmingState {
         }
         let changes =
             self.discard_keeping_unanswered(sessions, key, agent_id, Reason::AwaitingSelection);
-        if let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-        {
+        if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) {
             warming.aside = aside;
         }
         changes
@@ -645,8 +640,7 @@ impl WarmingState {
         key: &SessionKey,
         agent_id: &str,
     ) -> Option<AsideRecipe> {
-        agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))?
+        warming_if_held_mut(&mut self.agents, sessions, key, agent_id)?
             .aside
             .take()
     }
@@ -664,8 +658,7 @@ impl WarmingState {
         now: i64,
     ) -> (Changes, bool) {
         let mut changes = Changes::default();
-        let warming = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
+        let warming = warming_if_held_mut(&mut self.agents, sessions, key, agent_id)
             .filter(|_| aside.expires.is_some_and(|expires| expires > now));
         let Some(warming) = warming else {
             self.retained -= aside.observation.recipe.size;
@@ -709,24 +702,30 @@ impl WarmingState {
     /// starts a chain of its own. The read is tested beside `covered`, since the landing marks a cold complete rewrite
     /// covered too. The chain also runs through the lineage's unanswered probes where the caller hands them in beside
     /// the kept ones, as a compaction's completion, a lapse and the sweep do, since the recipe a failed turn re-arms
-    /// keeps probing the entry its kept probes paid for.
+    /// keeps probing the entry its kept probes paid for. `chain` arrives sorted by `at`, so a caller that judges every
+    /// probe of it sorts it once.
     fn chain_expires(chain: &[ChainLink], probe: ChainLink) -> i64 {
-        let mut later: Vec<ChainLink> = chain
+        chain
             .iter()
-            .copied()
             .filter(|other| {
                 other.at > probe.at
                     && other.model == probe.model
                     && other.fast == probe.fast
                     && other.account == probe.account
             })
-            .collect();
-        later.sort_by_key(|other| other.at);
-        later
-            .into_iter()
             .take_while(|other| other.read > 0 && other.covered)
             .map(|other| other.expires)
             .fold(probe.expires, i64::max)
+    }
+
+    /// The chain end (`chain_expires`) of each of `probes`, in their order, over the chain they make among themselves.
+    fn chain_ends(probes: &[Kept]) -> Vec<i64> {
+        let mut chain: Vec<ChainLink> = probes.iter().map(Kept::link).collect();
+        chain.sort_by_key(|link| link.at);
+        probes
+            .iter()
+            .map(|kept| Self::chain_expires(&chain, kept.link()))
+            .collect()
     }
 
     /// The decision `discard_keeping_unanswered` defers, taken by the successful completion of the request that
@@ -744,9 +743,7 @@ impl WarmingState {
         agent_id: &str,
         read: u64,
     ) -> Changes {
-        let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-        else {
+        let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) else {
             return Changes::default();
         };
         let answer = Answer {
@@ -773,11 +770,7 @@ impl WarmingState {
     ) -> Changes {
         let mut changes = Changes::default();
         changes.agent_row(key, agent_id);
-        let links: Vec<ChainLink> = probes.iter().map(Kept::link).collect();
-        let chain_ends: Vec<i64> = links
-            .iter()
-            .map(|&probe| Self::chain_expires(&links, probe))
-            .collect();
+        let chain_ends = Self::chain_ends(&probes);
         for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
             let lineage = kept.canonical_model == answer.model
                 && kept.fast == answer.fast
@@ -818,10 +811,9 @@ impl WarmingState {
         // Whatever ends the observation leaves nothing for a recipe set aside to wait for, so its body leaves memory
         // with it.
         self.drop_aside(sessions, key, agent_id);
-        if agent_ref(&sessions.entries, key, agent_id).is_none() {
+        let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) else {
             return changes;
-        }
-        let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
+        };
         drop_current(warming, &mut self.pending, &mut self.retained);
         warming.expires = None;
         warming.retry_at = None;
@@ -856,8 +848,7 @@ impl WarmingState {
         key: &SessionKey,
         agent_id: &str,
     ) {
-        let Some(open) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
+        let Some(open) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id)
             .and_then(|warming| warming.compaction.take())
         else {
             return;
@@ -874,24 +865,28 @@ impl WarmingState {
     pub(crate) fn settle_lapsed_pending(&mut self, sessions: &SessionsState, now: i64) -> Changes {
         let mut changes = Changes::default();
         let open = &self.pending;
-        let mut settled: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in sessions.entries.iter() {
             for agent_id in session.agents.keys() {
                 let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
                 // An open turn's or compaction's completion decides the probes, as `lapse` waits for it. A request that
                 // fails, past a head or not, or ends at a bus gap decides nothing and leaves them here.
-                // The sweep settles labeled probes alone, so an agent holding none builds no chain.
+                // The sweep settles labeled probes alone, and one whose own entry still lives cannot settle, since its
+                // chain ends at or after that entry, so an agent holding none past its own entry builds no chain.
                 if request_open(open, warming)
-                    || !warming.kept.iter().any(|kept| kept.pending.is_some())
+                    || !warming
+                        .kept
+                        .iter()
+                        .any(|kept| kept.pending.is_some() && kept.entry_expires <= now)
                 {
                     continue;
                 }
-                let chain: Vec<ChainLink> = warming
+                let mut chain: Vec<ChainLink> = warming
                     .kept
                     .iter()
                     .map(Kept::link)
                     .chain(warming.unanswered.iter().map(UnansweredProbe::link))
                     .collect();
+                chain.sort_by_key(|link| link.at);
                 let chain_ends: Vec<i64> = warming
                     .kept
                     .iter()
@@ -905,22 +900,17 @@ impl WarmingState {
                 {
                     continue;
                 }
-                let mut waiting = Vec::new();
                 let probes = std::mem::take(&mut warming.kept);
                 for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
                     match kept.pending {
                         Some(label) if chain_end <= now => {
                             self.settlements_after_save.push(kept.settle(key, label));
                         }
-                        _ => waiting.push(kept),
+                        _ => warming.kept.push(kept),
                     }
                 }
-                warming.kept = waiting;
-                settled.push((key.clone(), agent_id.clone()));
+                changes.agent_row(key, agent_id);
             }
-        }
-        for (key, agent_id) in &settled {
-            changes.agent_row(key, agent_id);
         }
         changes
     }
@@ -939,9 +929,7 @@ impl WarmingState {
         now: i64,
     ) -> Changes {
         let mut changes = Changes::default();
-        let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-        else {
+        let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) else {
             return changes;
         };
         let began = warming.reason != reason;
@@ -973,9 +961,7 @@ impl WarmingState {
         label: Wasted,
     ) -> Changes {
         let mut changes = Changes::default();
-        let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-        else {
+        let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) else {
             return changes;
         };
         let probes = warming.take_unanswered();
@@ -1068,9 +1054,7 @@ impl WarmingState {
     ) -> Changes {
         let mut changes = Changes::default();
         changes.agent_row(key, agent_id);
-        let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-        else {
+        let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) else {
             return changes;
         };
         drop_current(warming, &mut self.pending, &mut self.retained);
@@ -1092,9 +1076,7 @@ impl WarmingState {
         agent_id: &str,
         now: i64,
     ) {
-        let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-        else {
+        let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) else {
             return;
         };
         let unanswered = warming.take_unanswered();
@@ -1102,11 +1084,7 @@ impl WarmingState {
             .into_iter()
             .chain(unanswered)
             .collect();
-        let links: Vec<ChainLink> = probes.iter().map(Kept::link).collect();
-        let chain_ends: Vec<i64> = links
-            .iter()
-            .map(|&probe| Self::chain_expires(&links, probe))
-            .collect();
+        let chain_ends = Self::chain_ends(&probes);
         for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
             if chain_end <= now {
                 self.settlements.push(kept.settle(key, Wasted::Expired));
@@ -1155,17 +1133,13 @@ impl WarmingState {
         canonical: &HashMap<String, String>,
     ) -> Changes {
         let mut changes = Changes::default();
-        let mut followed: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in sessions.entries.iter() {
             for agent_id in session.agents.keys() {
                 let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
                 if warming.follow_resolutions(canonical) {
-                    followed.push((key.clone(), agent_id.clone()));
+                    changes.agent_row(key, agent_id);
                 }
             }
-        }
-        for (key, agent_id) in followed {
-            changes.agent_row(&key, &agent_id);
         }
         changes
     }
@@ -1196,7 +1170,7 @@ impl WarmingState {
         size: usize,
     ) -> (Changes, bool) {
         let mut changes = Changes::default();
-        let mut candidates: Vec<(bool, i64, SessionKey, String, usize)> = Vec::new();
+        let mut candidates: Vec<(bool, i64, &SessionKey, &String, usize)> = Vec::new();
         for (key, session) in &sessions.entries {
             for (agent_id, agent) in &session.agents {
                 let warming = warming_ref(&self.agents, key, agent_id).expect(AGENT_HELD);
@@ -1210,8 +1184,8 @@ impl WarmingState {
                     candidates.push((
                         session.attended,
                         agent.last_activity,
-                        key.clone(),
-                        agent_id.clone(),
+                        key,
+                        agent_id,
                         observation.recipe.size,
                     ));
                 }
@@ -1219,7 +1193,7 @@ impl WarmingState {
         }
         candidates.sort();
         let mut freed = 0;
-        let mut evicted = Vec::new();
+        let mut evicted: Vec<(&SessionKey, &String)> = Vec::new();
         for (_, _, key, agent_id, bytes) in candidates {
             if self.retained.saturating_sub(freed) + size <= cap {
                 break;
@@ -1233,8 +1207,8 @@ impl WarmingState {
         for (key, agent_id) in evicted {
             changes.append(self.discard(
                 sessions,
-                &key,
-                &agent_id,
+                key,
+                agent_id,
                 Reason::Evicted,
                 Some(Wasted::Evicted),
             ));
