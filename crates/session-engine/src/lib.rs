@@ -1,6 +1,7 @@
-//! The cache keepalive engine: retains a replayable recipe of every eligible request and probes it before the
-//! prompt cache expires, through the relay's own failover loop, so a session that went idle reads warm when it
-//! comes back.
+//! The session engine and the cache warming behind one handle. The session engine keeps the record of each session and
+//! agent that the companion reports. The cache warming retains a replayable recipe of every eligible request and probes
+//! it before the prompt cache expires, through the relay's own failover loop, so a session that went idle reads warm
+//! when it comes back.
 
 mod companion;
 mod engine;

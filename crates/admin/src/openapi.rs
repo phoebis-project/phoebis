@@ -88,7 +88,7 @@ Each operation names its request (path segments, query parameters, or body field
         (name = "Sessions", description = "Rows group by key, key generation, and session, so a key id created again \
             never merges its sessions with an earlier holder's. A row whose generation no live key holds is \
             `historical` and reads `companion` `none` with no recipe. The session of a pinned or \
-            active row is the one the router keys pins by, the client's own session id. A row the keepalive mod \
+            active row is the one the router keys pins by, the client's own session id. A row the companion mod \
             registered keeps the client's own session, the one the mod registered under. The row's `spend`, `day` \
             and `agent_requests` read the ledger's per-session totals over the requests the retention keeps under \
             its key, the count of its requests `spend.requests`, so Requests and Cost agree."),

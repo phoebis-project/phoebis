@@ -91,7 +91,7 @@ Claude Code plugin that runs inside the client's own process, reports session li
 holds no policy: every ceiling and switch is a pool field or a constant of the router. Installing the mod, its settings,
 the order it reads its credential in and what it reports are on [The companion mod](../companion/index.md), and the
 route it reports to, its eight events, the acknowledgment and the refusal codes are on [The
-relay](relay.md#the-keepalive-protocol). With its settings unset the mod reports under the URL and the key of [the
+relay](relay.md#the-companion-protocol). With its settings unset the mod reports under the URL and the key of [the
 environment block](client.md#the-environment-block). On the router's side, a registration holds a lease over the
 session, 90 seconds long, which each heartbeat renews, and the Sessions view names the mod's state for each session:
 `reporting` while the mod reports the session's agents, their parks and the person's presence, `silent` once the lease
@@ -362,8 +362,8 @@ reads `retained` again at the first tick after the pool is enabled. A `held` or 
 when the agent holds no prompt, as a request refused at its account selection does. `keepalive_off`, `opted_out` and
 `session_opted_out` are recorded when the request arrives and no body is kept, while `ineligible_credential` is read at
 the account selection. A request refused at its arrival credits no probe, so a probe outstanding when the pool's
-keepalive is turned off or the key's `keepalive` permission is taken away is judged at the agent's next followed turn
-or completed compaction, or settles as wasted.
+keepalive is turned off or the key's `keepalive` permission is taken away is judged at the agent's next followed turn or
+completed compaction, or settles as wasted.
 
 `partial_cache_coverage` names a probe that did not leave the whole prefix in the cache. The measure is the count of the
 agent's last request, the tokens it read and wrote. A probe on the recipe's own account covers by reading that many
@@ -498,9 +498,9 @@ newest other agent's where main holds none. A row's Cache cell reads `warm` whil
 or `cold` past it, with that summary's state word under it. A row's expanded detail reads each agent's state and cause
 with the sentence of each on hover, and its Cache warming details read each agent's TTL, last request, last and next
 probe, and the probes sent and the requests they kept warm since midnight UTC (see [Sessions](console.md#sessions)). The
-Dashboard's Sessions card reads the engine under "Keepalive engine": the sessions, the agent records and the retained
-bytes against their caps, the cache probes of the last 24 hours by outcome, and the requests whose entry expired between
-turns in that day while the keepalive still held their agent, beside the bus gaps since the start (see
+Dashboard's Sessions card reads the engine under "Engine caps": the sessions, the agent records and the retained bytes
+against their caps, the cache probes of the last 24 hours by outcome, and the requests whose entry expired between turns
+in that day while the keepalive still held their agent, beside the bus gaps since the start (see
 [Dashboard](console.md#dashboard)). A pool card that keeps caches warm reads the pool's three resolved ceilings after
 its `keepalive` chip, and the pool dialog's Keepalive group reads, under each field, the break-even a ceiling left off
 resolves to and the figure in effect under one switched on past it (see [Pools](console.md#pools)). The Analytics view's

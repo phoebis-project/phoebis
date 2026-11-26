@@ -44,7 +44,7 @@ pub fn presented_key(headers: &HeaderMap) -> Result<&str, AuthError> {
     Ok(presented)
 }
 
-/// Whether the body's `Content-Type` names `application/json`, its parameters aside: the admin gate and the keepalive
+/// Whether the body's `Content-Type` names `application/json`, its parameters aside: the admin gate and the companion's
 /// events route each hold a body-carrying write to it, and a missing or unreadable header reads as not JSON.
 pub fn is_json(headers: &HeaderMap) -> bool {
     headers

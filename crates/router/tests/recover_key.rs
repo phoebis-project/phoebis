@@ -167,8 +167,8 @@ fn agent(agent_id: &str, body: Option<&[u8]>) -> KeepaliveAgentRow {
 }
 
 /// Seals a registry under `key`: two oauth accounts with their credential bundles, one with a refresh in flight and
-/// one with a refresh resolved uncertain, an api_key account with its secret, and a keepalive session whose two
-/// agents hold one recipe body between them. Answers the accounts as seeded.
+/// one with a refresh resolved uncertain, an api_key account with its secret, and a saved session whose two agents
+/// hold one recipe body between them. Answers the accounts as seeded.
 fn seed(registry: &Path, key: &StorageKey) -> Vec<AccountRow> {
     let store = Store::open(registry, key, wall()).unwrap();
     for (id, kind) in [

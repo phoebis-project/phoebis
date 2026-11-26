@@ -15,7 +15,8 @@ use crate::routes::router_unavailable;
 use crate::session_spend::{agent_of, day_of, spend_of, AgentRequests, SessionDay, SessionSpend};
 use crate::AdminState;
 
-/// The live pins joined with what the ledger saw and the keepalive engine's own view, one row per session.
+/// The live pins joined with what the ledger saw and with what the session engine and the cache warming hold, one row
+/// per session.
 #[derive(serde::Serialize, ToSchema)]
 pub(crate) struct SessionList {
     pub sessions: Vec<Session>,
@@ -174,7 +175,7 @@ pub(crate) struct Session {
     pub facts: SessionFacts,
     /// Main's recipe, or the newest other agent's where main holds none.
     pub keepalive: SessionKeepalive,
-    /// Main's lifecycle word from the keepalive engine's record, whether or not a recipe stands: `busy`, `idle`,
+    /// Main's lifecycle word from the session engine's record, whether or not a recipe stands: `busy`, `idle`,
     /// `parked`, `registered`, `released` or `unknown`, where `registered` is a main busy awaiting a real request
     /// since the mod registered it or started it again. Null where no mod reports the session.
     #[schema(example = "busy")]
@@ -290,9 +291,9 @@ pub(crate) struct AgentContext {
     /// The share of the dropped thinking as output that a round's pick compares for this pin while it is cold, as the
     /// row's `move_drop_cost`. Null where `move_drop_size` is.
     pub move_drop_cost: Option<f64>,
-    /// The agent's lifecycle word from the keepalive engine's record: `busy`, `idle`, `parked`, `registered`,
-    /// `released` or `unknown`, where `registered` is an agent busy awaiting a real request since the mod registered it
-    /// or started it again. Null where no mod reports it.
+    /// The agent's lifecycle word from the session engine's record: `busy`, `idle`, `parked`, `registered`, `released`
+    /// or `unknown`, where `registered` is an agent busy awaiting a real request since the mod registered it or started
+    /// it again. Null where no mod reports it.
     #[schema(example = "idle")]
     pub lifecycle: Option<String>,
 }
@@ -836,7 +837,7 @@ impl<'a> BurnPricing<'a> {
 }
 
 /// A pin's agent line priced through `pricing`, which a pool's pins read too, so a pin answers the same members on
-/// both routes. `lifecycle` reads null: the keepalive engine's view is the sessions route's alone.
+/// both routes. `lifecycle` reads null: the session engine's view is the sessions route's alone.
 pub(crate) fn agent_line(standing: &PinStanding, pricing: &BurnPricing) -> AgentContext {
     let pin = &standing.pin;
     let priced = price_pin_burn(pin, standing.burn_unit, pricing);

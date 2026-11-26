@@ -1,12 +1,12 @@
 # The companion mod
 
 The companion mod is a Claude Code plugin that runs inside the Claude Code process and reports session liveness and
-agent state to the router, which the router's keepalive engine reads to decide which sessions' prompt caches to keep
-warm ([Keepalive](keepalive.md)). Installing the mod, its settings, the start check, the `allowance` tool and what the
-mod reports are in the companion's part of this site, [Phoebis Companion](../companion/index.md), which starts with
-[Install and settings](../companion/install.md). This page holds the router's side: the permissions a key gives its
-companion, what the router does with a request of another instance, and where the console shows a session the mod
-reports.
+agent state to the router. The router's session engine keeps the record of each session and agent, and the router's
+cache warming reads those records to decide which sessions' prompt caches to keep warm ([Keepalive](keepalive.md)).
+Installing the mod, its settings, the start check, the `allowance` tool and what the mod reports are in the companion's
+part of this site, [Phoebis Companion](../companion/index.md), which starts with [Install and
+settings](../companion/install.md). This page holds the router's side: the permissions a key gives its companion, what
+the router does with a request of another instance, and where the console shows a session the mod reports.
 
 ## The key's permissions
 
@@ -30,10 +30,10 @@ On the router's side, a request whose instance header names another instance tha
 foreign traffic while the holder's lease is live, and a session saved attended reads as live for one lease length after
 a router restart, until its registration arrives. The router leaves the session's recipes as they were, counts the
 mismatch, and at the session's first mismatch writes one WARN line,
-`a request named another instance than the session's registration`, naming the session id and never an instance id.
-Once the lease has lapsed, such a request meets no check and arms its recipe as the holder's does. The new instance's
-start still meets the silent holder and takes over as [The instance header](../companion/reports.md#the-owner-header)
-states, which replaces the agents those requests armed.
+`a request named another instance than the session's registration`, naming the session id and never an instance id. Once
+the lease has lapsed, such a request meets no check and arms its recipe as the holder's does. The new instance's start
+still meets the silent holder and takes over as [The instance header](../companion/reports.md#the-owner-header) states,
+which replaces the agents those requests armed.
 
 ## The Sessions view
 
@@ -43,5 +43,5 @@ with its custom title or its project's folder name, shows its project, its repos
 in two columns that are hidden by default, and, where the mod reports a subagent's facts, leads that subagent's line
 with its name, else its description ([Sessions](console.md#sessions)). Which facts a session reports is set in the mod
 alone, by settings that are off by default ([Configure](../companion/install.md#configure)), and the router has no
-setting for them. The router cleans each reported value before it keeps or shows it ([The keepalive
-protocol](relay.md#the-keepalive-protocol)).
+setting for them. The router cleans each reported value before it keeps or shows it ([The companion
+protocol](relay.md#the-companion-protocol)).

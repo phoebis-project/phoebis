@@ -167,7 +167,7 @@ pub(crate) struct Key {
     pub last_used_at: Option<i64>,
     pub retired_secret_last_used_at: Option<i64>,
     /// Live sessions whose newest request presented the secret the last rotation retired, 0 once the 15-minute
-    /// grace ends, and a session the keepalive mod registered that sent no request since counts as switched.
+    /// grace ends, and a session the companion mod registered that sent no request since counts as switched.
     pub sessions_on_retired_secret: usize,
     /// The key's own guardrails in position order, which it runs after its pool's. One its pool holds too runs once,
     /// at the pool's position.

@@ -21,7 +21,7 @@ One `phoebis` process serves three listeners, and a fourth where the bootstrap f
 
 | Listener | Bootstrap key | Serves |
 | --- | --- | --- |
-| Proxy | `proxy.listen` | `/v1/messages` and its companions, the key's own usage page, plus the keepalive route |
+| Proxy | `proxy.listen` | `/v1/messages` and its companions, the key's own usage page, plus the events route |
 | Admin | `admin.listen` | The console and `/admin/*` (see [API reference](api-reference.md)) |
 | Metrics | `stats.metrics_listen` | `/metrics` in Prometheus text format, no credential, plain HTTP |
 | Feature | `features.listen`, optional | The calls of Artifacts and the claude.ai connectors, which Claude Code sends to two fixed hosts (see [claude.ai features](claude-ai-features.md)) |

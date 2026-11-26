@@ -245,10 +245,10 @@ Under the container the image ships no `sqlite3`, so the sequence runs as uid 65
 The sequence discards everything that the storage key seals, and nothing else: the API-key secrets, the canary, the
 OAuth credential bundles, the keepalive's recipe bodies and the facts that a companion mod reported go, and each account
 rests where the Accounts view's Disconnect leaves it, with the cause `operator` and its open refresh attempts settled.
-The accounts, downstream keys, keepalive sessions, pins, pools and session memory stay. `-bail` stops at the first
-statement that fails, and the transaction it leaves open rolls back, so the file is either wholly changed or untouched.
-The subcommand seals the new canary inside the same transaction, and after the sequence run by hand the next start under
-the new key finds nothing sealed and seals one. The steps that remain are the same either way.
+The accounts, downstream keys, pins, pools, the session engine's sessions and session memory stay. `-bail` stops at the
+first statement that fails, and the transaction it leaves open rolls back, so the file is either wholly changed or
+untouched. The subcommand seals the new canary inside the same transaction, and after the sequence run by hand the next
+start under the new key finds nothing sealed and seals one. The steps that remain are the same either way.
 
 An operator who would rather start over moves the registry file aside instead, with its `-wal` and `-shm` files if
 present, and lets the next start create an empty registry, in which every account, pool and key is created again.
@@ -372,13 +372,13 @@ On the host:
 4. Take a [backup](#backup): `phoebis backup --to <dir>`.
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.
 6. Restart the service: `sudo systemctl restart phoebis`. The stop runs under one budget of 35 seconds, which cuts its
-   phases in this order: the keepalive shutdown and the listeners' drain of in-flight requests, the relayed bodies still
-   running, the catalog's retries, a credential refresh still in flight, the ledger's last writes, then the routing
-   state's. In-flight requests drain for up to 30 seconds inside the budget, which leaves the phases after them at least
-   five. Each phase takes what the ones before it left, and the session memory's last flush and the store's close run
-   whatever is left. The process then stops its runtime within what remains of the budget, so a ledger or routing write
-   the budget cut, which still runs on a blocking thread, ends with the process, and a warn line names that write. The
-   unit's `TimeoutStopSec=40` leaves five seconds past the budget.
+   phases in this order: the session engine's and the cache warming's shutdown and the listeners' drain of in-flight
+   requests, the relayed bodies still running, the catalog's retries, a credential refresh still in flight, the ledger's
+   last writes, then the routing state's. In-flight requests drain for up to 30 seconds inside the budget, which leaves
+   the phases after them at least five. Each phase takes what the ones before it left, and the session memory's last
+   flush and the store's close run whatever is left. The process then stops its runtime within what remains of the
+   budget, so a ledger or routing write the budget cut, which still runs on a blocking thread, ends with the process,
+   and a warn line names that write. The unit's `TimeoutStopSec=40` leaves five seconds past the budget.
 7. Confirm the upgrade with `phoebis --version`, then `phoebis status` for `ready`, or `GET /admin/system` for
    `version`, `storage_ok`, `ready`, `ledger.dropped` and `ledger.write_failures` each reading `0`, and
    `router.dropped_reports` all reading `0`. `router.dropped_reports` counts the reports a closed queue refused at

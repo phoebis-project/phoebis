@@ -1,4 +1,4 @@
-//! The keepalive mod's one route, on the proxy listener under the API key: the mod's report in, its acknowledgment
+//! The companion mod's one route, on the proxy listener under the API key: the mod's report in, its acknowledgment
 //! or its refusal code out.
 
 use std::sync::Arc;

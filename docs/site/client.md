@@ -239,9 +239,9 @@ health check read `/api/ready` instead: the two differ when the router loop, the
 while the listener stays up, and `dead` names each one that died as `ledger`, `router` or `store`. Every refusal on
 the listener, the wrong-method and unknown-path answers included, carries an Anthropic-shaped error body
 ([Refusal codes](#refusal-codes)), with two exceptions. The not-ready `503` of `/api/ready` carries the readiness body
-instead, and the keepalive route answers a report it refuses with a JSON body whose `code` the mod reads, under the
-codes [The keepalive protocol](relay.md#the-keepalive-protocol) lists, while a key it refuses gets the answer
-`/v1/messages` gives. Every answer of `/v0/companion/events`, `/v1/models`, `/v1/models/{*id}` and `/v1/usage` carries
+instead, and the events route answers a report it refuses with a JSON body whose `code` the mod reads, under the codes
+[The companion protocol](relay.md#the-companion-protocol) lists, while a key it refuses gets the answer `/v1/messages`
+gives. Every answer of `/v0/companion/events`, `/v1/models`, `/v1/models/{*id}` and `/v1/usage` carries
 `Cache-Control: no-store`, a refusal of a malformed path among them.
 
 The key is presented as exactly one of `Authorization: Bearer <secret>` or `x-api-key: <secret>`. No credential
@@ -280,9 +280,9 @@ Every refusal the relay answers on the proxy listener and on the feature listene
 and `Retry-After` where the row says so. A client meets `domain_checks_at_cap`, `feature_account_unavailable`,
 `feature_account_unset`, `feature_not_allowed`, `key_sockets` and `sockets_at_cap` on the feature listener alone
 ([claude.ai features](claude-ai-features.md#what-the-router-refuses-and-what-the-client-shows)), and the `401` codes of
-a key on both. The companion mod's routes answer a refused key the same way and their other refusals in their own
-shape, described on [The relay](relay.md#the-keepalive-protocol). One row per code, with every message the code is
-answered with.
+a key on both. The companion mod's routes answer a refused key the same way and their other refusals in their own shape,
+described on [The relay](relay.md#the-companion-protocol). One row per code, with every message the code is answered
+with.
 
 <!-- refusal-codes: begin -->
 | Code | Status | Type | Messages | What to do |

@@ -1,4 +1,4 @@
-//! The keepalive mod's reporting protocol: eight events in JSON bodies, monotonic sequences, per-agent
+//! The companion mod's reporting protocol: eight events in JSON bodies, monotonic sequences, per-agent
 //! generations, a lease, and a registration acknowledgment that carries the session's agents so the mod
 //! reconciles from the answer. The contract is the Go engine's, plus the park fields of a `parked` state, the
 //! `presence` activity, the key scope on every session and the two facts events.

@@ -125,10 +125,10 @@ the registry, and is kept for `sessions.memory_retention_days` ([sessions](insta
 
 The never-copied set has its reasons: the hop-by-hop headers describe the client's connection rather than the payload,
 cookies and proxy credentials are the client's own secrets, the forwarding headers would disclose the client's network,
-and `x-phoebis-instance-id` is the router's marker of the client process's instance, which the companion mod writes
-and the router reads. A client's `Expect: 100-continue` goes for the reason [Headers and
-transport](#headers-and-transport) gives. `connection` is the router's own because its upstream connection is pooled and
-independent of the client's, which ends at the router.
+and `x-phoebis-instance-id` is the router's marker of the client process's instance, which the companion mod writes and
+the router reads. A client's `Expect: 100-continue` goes for the reason [Headers and transport](#headers-and-transport)
+gives. `connection` is the router's own because its upstream connection is pooled and independent of the client's, which
+ends at the router.
 
 A call of the claude.ai features, which arrives on the feature listener, takes fewer edits than a model request. Its
 head keeps each line in the client's place and spelling. The client's first `authorization` or `x-api-key` line carries
@@ -475,7 +475,9 @@ handler as the client's own, as a probe, to keep its prompt cache warm ([Turning
 probe costs a cache read ([How a probe works](keepalive.md#how-a-probe-works)) and is the one request of this list with
 a switch.
 
-## The keepalive protocol
+<a id="the-keepalive-protocol"></a>
+
+## The companion protocol
 
 The companion mod reports to one route, `POST /v0/companion/events` on the proxy listener, with `Authorization: Bearer
 <router key>`, `Content-Type: application/json` and a JSON body of at most 16 KiB. The key is resolved exactly as
@@ -507,12 +509,12 @@ whole characters, an `agent_type` or a `branch` over 256 bytes is left out, and 
 `repository_root` or a reduced `repository` over 1,024 bytes. The `repository` is kept as `host/path` with the ASCII
 letters of the host in lower case, without the scheme, the user information, the port, the query, the fragment, one
 trailing `.git` and each trailing slash, and a value already in the form `host/path` is kept as it is given. A `file`
-URL, a local path, a remote with an `@` behind its host part and each other remote the rule cannot read are left out.
-A registration names the kinds of facts that its instance reports in `reported_facts`, a list of the words `agents`
-(each agent's description, name and type), `project` (the session's branch, project, repository, repository root and
-working directory) and `title`. An empty list says that the instance reports none. When the router accepts the
-registration, it drops each stored kind of the session that the list leaves out. The facts are display values of the
-console's Sessions view, and the router never refuses a report over a fact's content.
+URL, a local path, a remote with an `@` behind its host part and each other remote the rule cannot read are left out. A
+registration names the kinds of facts that its instance reports in `reported_facts`, a list of the words `agents` (each
+agent's description, name and type), `project` (the session's branch, project, repository, repository root and working
+directory) and `title`. An empty list says that the instance reports none. When the router accepts the registration, it
+drops each stored kind of the session that the list leaves out. The facts are display values of the console's Sessions
+view, and the router never refuses a report over a fact's content.
 
 The router accepts five states. `busy` is an agent at work. `idle` is an agent between requests: a prompt that sent no
 request, such as a local command, lets the idle window go on, and a park that ended restarts it. `parked` is an agent
@@ -578,11 +580,12 @@ without a registration. The eighteen codes, by status:
 The mod sends one request at a time. Reports queue in order, and the next goes out when the answer to the one in flight
 lands. A heartbeat and each other lifecycle report that may go out, which is each report but a `session_facts` or an
 `agent_facts`, go ahead of a facts report that waits, wherever the two stand in the queue. No hook waits for a request,
-so a stalled router never holds up a tool call or a prompt. A report that repeats what the queue already holds collapses
-into it: the queue keeps one activity per agent (a prompt over a presence), one heartbeat, the newest `session_facts`,
-and the newest state and the newest `agent_facts` per agent. The answer to a `session_start` or a `heartbeat` arms the
-next heartbeat at a third of the remaining lease, between 1 and 25 seconds. No other answer moves it, and no heartbeat
-goes out before a registration has been acknowledged. What each answer makes the mod do:
+so a stalled router never holds up a tool call or a prompt. A request with no answer within 10 seconds counts as a
+transport failure, and an answer that arrives later changes nothing. A report that repeats what the queue already holds
+collapses into it: the queue keeps one activity per agent (a prompt over a presence), one heartbeat, the newest
+`session_facts`, and the newest state and the newest `agent_facts` per agent. The answer to a `session_start` or a
+`heartbeat` arms the next heartbeat at a third of the remaining lease, between 1 and 25 seconds. No other answer moves
+it, and no heartbeat goes out before a registration has been acknowledged. What each answer makes the mod do:
 
 - A `2xx`: the report is done and the backoff starts over.
 - A transport failure, a `5xx`, a `session_limit`, or an `agent_limit` on a `session_start`: the report goes back to the
@@ -615,17 +618,17 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 
 ## The companion routes
 
-The companion mod reads one route beside the keepalive route, `GET /v0/companion/allowance?session_id=<id>` on the proxy
-listener, with `Authorization: Bearer <router key>`. The key is resolved exactly as `/v1/messages` and the keepalive
-route resolve it, with the generation it was created under. `session_id` is the route's one query parameter, the
-session's id as the client's session header carries it, taken as sent and never percent-decoded, and it has to be a
-valid id. The answer is the key's pool as the router reads it at that instant, each active account under a pseudonym and
-the asking session's pins, as JSON under `Cache-Control: no-store`, which every answer of the route carries. The route
-writes no ledger row and counts in no request figure, so a read shows in no statistic and no view. The mod reads it once
-at session start and then at the model's call, from a cache of ten seconds ([The allowance
+The companion mod reads one route beside the events route, `GET /v0/companion/allowance?session_id=<id>` on the proxy
+listener, with `Authorization: Bearer <router key>`. The key is resolved exactly as `/v1/messages` and the events route
+resolve it, with the generation it was created under. `session_id` is the route's one query parameter, the session's id
+as the client's session header carries it, taken as sent and never percent-decoded, and it has to be a valid id. The
+answer is the key's pool as the router reads it at that instant, each active account under a pseudonym and the asking
+session's pins, as JSON under `Cache-Control: no-store`, which every answer of the route carries. The route writes no
+ledger row and counts in no request figure, so a read shows in no statistic and no view. The mod reads it once at
+session start and then at the model's call, from a cache of ten seconds ([The allowance
 tool](../companion/allowance-tool.md)), and the router holds no limiter of its own on the route.
 
-A refusal takes the two shapes of the keepalive route. A missing, malformed, ambiguous or refused key is answered the
+A refusal takes the two shapes of the events route. A missing, malformed, ambiguous or refused key is answered the
 relay's way, the same `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming
 an `auth_*` code ([refusal codes](client.md#refusal-codes)). Every other refusal is the route's own JSON,
 `{"code": "<code>"}`, without the `x-phoebis-error-code` header. The checks run in the table's order, so a `400` says

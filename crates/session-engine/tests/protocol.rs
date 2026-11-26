@@ -1,4 +1,4 @@
-//! The keepalive mod's one route: a JSON report under the router key, scoped to that key, answered with the
+//! The companion mod's one route: a JSON report under the router key, scoped to that key, answered with the
 //! acknowledgment the mod reconciles from or with a code and the status it carries.
 mod common;
 use std::collections::BTreeMap;
