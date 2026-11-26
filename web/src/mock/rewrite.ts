@@ -26,7 +26,7 @@ export const proWeekRewriteOf = (tokens: number, model: string, client: string |
  * The same rewrite as the Pro share it spends of the week the pin's model draws (`rewriteWindowOf`), the Fable week for
  * a Fable model, where the router prices a pin's move. Null for a model without a weight on that week.
  */
-export const weekRewriteOf = (tokens: number, model: string, client: string | null, ttlMs: number): number | null => {
+export const modelWeekRewriteOf = (tokens: number, model: string, client: string | null, ttlMs: number): number | null => {
   const costs = tablesFor(client);
   return shareIn(costs, rewriteWindowOf(model), anchorTier(costs), model, cacheWriteOf(tokens, ttlMs), false);
 };

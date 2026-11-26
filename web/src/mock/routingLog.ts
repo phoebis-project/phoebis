@@ -2050,7 +2050,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
  * refusal alone, or nothing dated.
  */
 function exhaustionOf(candidates: RecordCandidate[]): Omit<Exhaustion, 'status'> {
-  const answer = (kind: string, o: Partial<Exhaustion> = {}) => ({ deadline: null, kind, obstacle: null, reason: null, window: null, ...o });
+  const answer = (kind: string, o: Partial<Omit<Exhaustion, 'status'>> = {}) => ({ deadline: null, kind, obstacle: null, reason: null, window: null, ...o });
   const obstacles = candidates.flatMap((c) => (c.obstacle ? [c.obstacle] : []));
   const untilOf = (until: string | null) => (until === null ? Number.POSITIVE_INFINITY : Date.parse(until));
   const fastLane = obstacles.filter((o) => o.name === 'cooldown' && o.reason === 'fast_rate_limit').map((o) => untilOf(o.until));

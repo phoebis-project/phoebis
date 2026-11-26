@@ -11,7 +11,7 @@ import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './
 import { FIXTURES } from './generated/fixtures';
 import { affinityTtlMsOf, eligibilityOf, keyById, poolById, servedFigures } from './pools';
 import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, attemptEnd, fastTurn, pinCacheTtlOf, pinKeyFor, pinReadAt, pinStampOf, requestById } from './requests';
-import { dropSizeOf, droppedThinkingOf, moveSizeOf, weekRewriteOf } from './rewrite';
+import { dropSizeOf, droppedThinkingOf, modelWeekRewriteOf, moveSizeOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, regimeFor, tablesFor } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
@@ -433,8 +433,8 @@ const moveFiguresOf = (pin: Parameters<typeof droppedThinkingOf>[0], tokens: num
   const client = CLIENTS[pin.keyId] ?? null;
   const drop = dropSizeOf(dropped, pin.model, client, ttlMs);
   const size = moveSizeOf(tokens, dropped, drop);
-  const dropCost = drop === null ? null : weekRewriteOf(drop, pin.model, client, ttlMs);
-  return { accountBound, moveCost: accountBound || !hasDestination(pin.accountId, pin.keyId) ? null : size === null ? dropCost : weekRewriteOf(size, pin.model, client, ttlMs), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
+  const dropCost = drop === null ? null : modelWeekRewriteOf(drop, pin.model, client, ttlMs);
+  return { accountBound, moveCost: accountBound || !hasDestination(pin.accountId, pin.keyId) ? null : size === null ? dropCost : modelWeekRewriteOf(size, pin.model, client, ttlMs), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
 };
 /** A row with no pin, which answers no flag of held account state and none of its move's figures. */
 const NO_MOVE: Pick<Session, 'accountBound' | 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> = { accountBound: null, moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null };

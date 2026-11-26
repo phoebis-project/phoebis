@@ -4,7 +4,7 @@ export type CreatedRow = { id: string; named: boolean; phase: 'confirmed' | 'rea
 
 /** What one render of the Accounts page hands the guard: the address's id, whether the loaded list holds the row and
  *  whether the list's read is out. */
-export type CreatedRowView = { accountId: string | undefined; listed: boolean; loading: boolean };
+type CreatedRowView = { accountId: string | undefined; listed: boolean; loading: boolean };
 
 export const confirmedRow = (id: string): CreatedRow => ({ id, named: false, phase: 'confirmed' });
 
