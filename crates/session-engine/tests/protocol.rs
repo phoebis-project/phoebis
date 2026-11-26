@@ -485,6 +485,13 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             code("invalid_event"),
         ),
         (
+            "a body that names protocol twice",
+            Some(JSON),
+            br#"{"protocol":2,"event":"heartbeat","session_id":"session","instance_id":"instance","sequence":6,"protocol":1}"#.to_vec(),
+            400,
+            code("invalid_event"),
+        ),
+        (
             "a missing session id",
             Some(JSON),
             json_body(without(heartbeat(json!({})), "session_id")),
