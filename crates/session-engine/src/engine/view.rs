@@ -70,7 +70,7 @@ pub struct RecipeView {
     pub wake_at: Option<i64>,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct SessionView {
     pub agents: usize,
     pub companion: CompanionState,

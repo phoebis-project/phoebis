@@ -4,7 +4,7 @@
 mod common;
 
 use common::*;
-use phoebis_session_engine::{Lifecycle, ParkKind, Reason, RecipeState, RecipeView, SummaryState};
+use phoebis_session_engine::{Lifecycle, ParkKind, Reason, RecipeState, RecipeView};
 use serde_json::{json, Value};
 
 const DAY: i64 = 86_400_000;
@@ -380,8 +380,8 @@ async fn a_session_whose_main_holds_no_recipe_reads_the_newest_other_agents_reci
     }
     r.state("worker-2", "idle").await;
     assert_eq!(
-        r.engine.sessions()[0].keepalive.state,
-        Some(SummaryState::Idle),
+        serde_json::to_value(r.engine.sessions()[0].keepalive.state).unwrap(),
+        json!("idle"),
         "{:?}",
         r.engine.sessions()
     );
@@ -400,8 +400,11 @@ async fn mains_lifecycle_word_stands_beside_an_empty_summary_while_main_holds_no
     );
     let view = &r.engine.sessions()[0];
     assert_eq!(
-        (view.lifecycles.get("main").copied(), view.keepalive.state),
-        (Some(Lifecycle::Idle), None),
+        (
+            view.lifecycles.get("main").copied(),
+            view.keepalive.state.is_none()
+        ),
+        (Some(Lifecycle::Idle), true),
         "{view:?}"
     );
 }

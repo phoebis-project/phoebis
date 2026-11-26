@@ -36,4 +36,4 @@ pub use warming::probe::PROBE_DEADLINE;
 pub use warming::recipe::{make_recipe, request_ttl_ms, Recipe};
 pub use warming::savings::SavingsUnit;
 pub use warming::usage::{ProbeUsage, MAX_USAGE_BYTES};
-pub use warming::view::{AgentCounts, KeepaliveSummary, RecipeState, SummaryState, WarmingCounts};
+pub use warming::view::{AgentCounts, KeepaliveSummary, RecipeState, WarmingCounts};

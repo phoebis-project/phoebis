@@ -12,8 +12,7 @@ use phoebis_bus::{
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
 use phoebis_session_engine::{
-    Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Lifecycle, Reason, RecipeState,
-    SessionCaps,
+    Guard, KeepaliveLimits, KeepalivePolicy, Lifecycle, Reason, RecipeState, SessionCaps,
 };
 use serde_json::json;
 
@@ -1650,14 +1649,15 @@ async fn a_completed_compaction_answers_the_chain_earns_its_credit_and_stops_the
         ),
         "{view:?}"
     );
+    let summary = r.engine.sessions().remove(0).keepalive;
     assert_eq!(
-        r.engine.sessions()[0].keepalive,
-        KeepaliveSummary {
-            cause: None,
-            last_guard: None,
-            next_probe_at: None,
-            state: None
-        },
+        (
+            summary.cause,
+            summary.last_guard,
+            summary.next_probe_at,
+            summary.state.is_none()
+        ),
+        (None, None, None, true),
         "the Sessions row's keepalive member reads null once the recipe stopped"
     );
     // 870 s in, past the stopped recipe's next due time.

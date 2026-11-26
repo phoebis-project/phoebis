@@ -85,7 +85,7 @@ pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
 
 /// The state word of a session row's summary: the state of the agent whose recipe stands for the session, or `Ended`
 /// for a session whose own option holds the cache warming off, which holds no recipe.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SummaryState {
     Busy,
@@ -111,7 +111,7 @@ impl From<AgentState> for SummaryState {
 /// Main's recipe as the session row reads it, or the newest other agent's where main holds none, every member null
 /// while no agent holds one. A session whose own option holds the cache warming off reads the cause
 /// `session_opted_out` and the state `ended`.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct KeepaliveSummary {
     pub cause: Option<Reason>,
     pub last_guard: Option<Guard>,
