@@ -639,9 +639,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     let stored = state
         .engine
         .stored_facts(
-            rows.keys()
-                .filter(|key| live.get(&key.key_id) == Some(&key.key_generation))
-                .map(|key| {
+            rows.iter()
+                .filter(|(_, entry)| !entry.historical)
+                .map(|(key, _)| {
                     (
                         key.key_id.clone(),
                         key.key_generation,
@@ -651,21 +651,20 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 .collect(),
         )
         .await;
-    for (key, entry) in rows.iter_mut() {
-        let id = (
-            key.key_id.clone(),
-            key.key_generation,
-            key.session_id.clone(),
-        );
-        let Some(facts) = stored.get(&id) else {
+    for ((key_id, key_generation, session_id), facts) in stored {
+        let Some(entry) = rows.get_mut(&SessionSpendKey {
+            key_id,
+            key_generation,
+            session_id,
+        }) else {
             continue;
         };
         entry.facts = SessionFacts::from(&facts.session);
         entry.agent_facts = facts
             .agents
-            .iter()
+            .into_iter()
             .map(|(agent_id, agent)| SessionAgentFacts {
-                agent_id: agent_id.clone(),
+                agent_id,
                 agent_type: agent.agent_type().map(str::to_owned),
                 description: agent.description().map(str::to_owned),
                 name: agent.name().map(str::to_owned),
