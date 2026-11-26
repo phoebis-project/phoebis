@@ -26,10 +26,8 @@ use crate::sessions::facts::{
     AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts, StoredSessionFacts,
 };
 use crate::sessions::persist::{decode_session, session_row, PersistKey, SESSION_RECORD_VERSION};
-use crate::sessions::state::{
-    agent_ref, key_stands, Agent, Session, SessionKey, AGENT_HELD, MAIN_AGENT,
-};
-use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
+use crate::sessions::state::{key_stands, Agent, Session, SessionKey, MAIN_AGENT};
+use crate::warming::agent::{warming_mut, AgentWarming};
 use crate::warming::causes::{Reason, Wasted};
 use crate::warming::config::KeepaliveTiming;
 use crate::warming::observation::{Observation, Settlement};
@@ -87,24 +85,8 @@ pub(crate) struct Snapshot {
     removed_sessions: Vec<(PersistKey, u64)>,
     removed_agents: Vec<((PersistKey, String), u64)>,
     pools: Vec<(String, u64)>,
-    /// The engine's recorded cutoff as this snapshot read it, content of its own: a roll that dropped a day while no
-    /// pool was dirty still has the registry's rows of that day to delete.
-    purge_counters_before: Option<i64>,
     facts: Vec<(FactsKey, u64)>,
     fact_kinds: Vec<((PersistKey, FactsKind), u64)>,
-}
-
-impl Snapshot {
-    fn is_empty(&self) -> bool {
-        self.sessions.is_empty()
-            && self.agents.is_empty()
-            && self.removed_sessions.is_empty()
-            && self.removed_agents.is_empty()
-            && self.pools.is_empty()
-            && self.purge_counters_before.is_none()
-            && self.facts.is_empty()
-            && self.fact_kinds.is_empty()
-    }
 }
 
 /// An agent read back from its two rows: the session engine's record, the warming's, and the observation's fields
@@ -130,8 +112,12 @@ fn decode_agent(
     Some((agent, warming, observation))
 }
 
-fn persist_key_of(key: &SessionKey, session: &Session) -> PersistKey {
-    (key.0.clone(), session.key_generation, key.1.clone())
+pub(crate) fn persist_key_of(key: &SessionKey, key_generation: i64) -> PersistKey {
+    (key.0.clone(), key_generation, key.1.clone())
+}
+
+fn session_key_of(row: &PersistKey) -> SessionKey {
+    (row.0.clone(), row.2.clone())
 }
 
 impl Inner {
@@ -144,12 +130,11 @@ impl Inner {
         self.sessions
             .entries
             .get(key)
-            .map(|session| persist_key_of(key, session))
+            .map(|session| persist_key_of(key, session.key_generation))
     }
 
     fn session_of(&self, key: &PersistKey) -> Option<&Session> {
-        self.sessions
-            .held_by(&(key.0.clone(), key.2.clone()), key.1)
+        self.sessions.held_by(&session_key_of(key), key.1)
     }
 
     /// The session's row is dirty under the generation it is held under now.
@@ -164,8 +149,13 @@ impl Inner {
 
     /// The agent's rows are dirty under its session's generation now.
     pub(crate) fn touch_agent(&mut self, key: &SessionKey, agent_id: &str) {
-        let held = agent_ref(&self.sessions.entries, key, agent_id).is_some();
-        let Some(row) = self.persist_key(key).filter(|_| held) else {
+        let Some(row) = self
+            .sessions
+            .entries
+            .get(key)
+            .filter(|session| session.agents.contains_key(agent_id))
+            .map(|session| persist_key_of(key, session.key_generation))
+        else {
             return;
         };
         let revision = self.bump();
@@ -196,7 +186,7 @@ impl Inner {
         };
         let agents: Vec<String> = self.sessions.entries[key].agents.keys().cloned().collect();
         for agent_id in agents {
-            self.forget_agent(key, &agent_id);
+            self.file_removed_agent(row.clone(), agent_id);
         }
         self.file_removed_session(row);
     }
@@ -295,12 +285,7 @@ impl Inner {
                 .session_of(row)
                 .and_then(|session| session.agents.get(agent_id))
             {
-                let warming = warming_ref(
-                    &self.warming.agents,
-                    &(row.0.clone(), row.2.clone()),
-                    agent_id,
-                )
-                .expect(AGENT_HELD);
+                let warming = self.warming.held(&session_key_of(row), agent_id);
                 // Both of the agent's rows or neither, so no batch writes one of them beside a stale other.
                 match (
                     crate::sessions::persist::agent_row(row, agent, now),
@@ -377,7 +362,6 @@ impl Inner {
                 .extend(self.warming.counter_rows(pool_id));
             snapshot.pools.push((pool_id.clone(), *revision));
         }
-        snapshot.purge_counters_before = self.warming.purge_cutoff();
         snapshot.batch.purge_counters_before = self.warming.purge_cutoff();
         snapshot
     }
@@ -400,34 +384,51 @@ impl Inner {
                 .session_of(row)
                 .is_some_and(|session| session.agents.contains_key(agent_id))
             {
-                let key: SessionKey = (row.0.clone(), row.2.clone());
-                self.warming.settle_body(&key, agent_id, *sealed, unchanged);
+                self.warming
+                    .settle_body(&session_key_of(row), agent_id, *sealed, unchanged);
             }
         }
-        fn retire<K: Ord>(dirty: &mut BTreeMap<K, u64>, saved: &[(K, u64)]) {
-            for (key, revision) in saved {
-                if dirty.get(key) == Some(revision) {
+        fn retire<K: Ord, V>(
+            dirty: &mut BTreeMap<K, V>,
+            saved: &[(K, u64)],
+            revision: impl Fn(&V) -> u64,
+        ) {
+            for (key, saved_revision) in saved {
+                if dirty
+                    .get(key)
+                    .is_some_and(|value| revision(value) == *saved_revision)
+                {
                     dirty.remove(key);
                 }
             }
         }
-        retire(&mut self.dirty.sessions, &snapshot.sessions);
-        retire(&mut self.dirty.agents, &snapshot.agents);
-        retire(&mut self.dirty.removed_sessions, &snapshot.removed_sessions);
-        retire(&mut self.dirty.removed_agents, &snapshot.removed_agents);
-        retire(&mut self.dirty.pools, &snapshot.pools);
-        retire(&mut self.dirty.fact_kinds, &snapshot.fact_kinds);
-        for (key, revision) in &snapshot.facts {
-            if self
-                .dirty
-                .facts
-                .get(key)
-                .is_some_and(|filed| filed.revision == *revision)
-            {
-                self.dirty.facts.remove(key);
-            }
-        }
-        self.warming.purge_landed(snapshot.purge_counters_before);
+        retire(&mut self.dirty.sessions, &snapshot.sessions, |revision| {
+            *revision
+        });
+        retire(&mut self.dirty.agents, &snapshot.agents, |revision| {
+            *revision
+        });
+        retire(
+            &mut self.dirty.removed_sessions,
+            &snapshot.removed_sessions,
+            |revision| *revision,
+        );
+        retire(
+            &mut self.dirty.removed_agents,
+            &snapshot.removed_agents,
+            |revision| *revision,
+        );
+        retire(&mut self.dirty.pools, &snapshot.pools, |revision| *revision);
+        retire(
+            &mut self.dirty.fact_kinds,
+            &snapshot.fact_kinds,
+            |revision| *revision,
+        );
+        retire(&mut self.dirty.facts, &snapshot.facts, |filed| {
+            filed.revision
+        });
+        self.warming
+            .purge_landed(snapshot.batch.purge_counters_before);
     }
 
     /// `discard` for a recipe the load does not keep. The generation stays: nothing from before the restart can
@@ -907,10 +908,6 @@ impl Engine {
         self.hooks.raise(&self.hooks.persist_snapshots);
         let settled = std::mem::take(&mut snapshot.settled);
         // Nothing to write means the registry already holds every row, which releases the held settlements too.
-        if snapshot.is_empty() {
-            self.lock().release_settled(settled);
-            return;
-        }
         if snapshot.batch.is_empty() {
             let mut inner = self.lock();
             inner.acknowledge(&snapshot);

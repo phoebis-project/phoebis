@@ -32,7 +32,7 @@ use crate::sessions::state::{
     agent_ref, Arrived, ParkPassed, SessionKey, SessionsState, Slot, AGENT_HELD, MAIN_AGENT,
 };
 use crate::sessions::view::SessionCounts;
-use crate::warming::agent::{warming_mut, warming_ref};
+use crate::warming::agent::warming_mut;
 use crate::warming::breakeven::{CeilingInputs, FactorRows};
 use crate::warming::causes::{Reason, Wasted};
 use crate::warming::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, MAX_WORKERS};
@@ -44,7 +44,7 @@ use crate::warming::idle::{utc_day, IdleReturns};
 use crate::warming::observation::{
     ChainMark, Credit, Skipped, Unanswered, CHAIN_CONTRADICTION_COVERAGE,
 };
-use crate::warming::probe::{ceiling, run_job, wasted_label, Exchange, ProbeJob, ProbeRecord};
+use crate::warming::probe::{ceiling, run_job, Exchange, ProbeJob, ProbeRecord};
 use crate::warming::recipe::make_recipe;
 use crate::warming::requests::reported_prompt;
 use crate::warming::savings::{AttemptFunding, SavingsUnit};
@@ -293,10 +293,7 @@ impl Engine {
     /// its lease by a caller that happened to arrive before the ticker.
     pub fn expire(&self) {
         let now = self.now();
-        {
-            let mut inner = self.lock();
-            inner.sweep(now);
-        }
+        self.lock().sweep(now);
         self.flush();
     }
 
@@ -306,10 +303,7 @@ impl Engine {
         inner.closed = true;
         let keys: Vec<SessionKey> = inner.sessions.entries.keys().cloned().collect();
         for key in keys {
-            let changes = inner
-                .warming
-                .discard_session(&inner.sessions, &key, Reason::Reset, None);
-            inner.apply_changes(changes);
+            inner.warm(|w, s| w.discard_session(s, &key, Reason::Reset, None));
         }
         inner.sessions.clear();
         inner.warming.clear();
@@ -381,10 +375,7 @@ impl Inner {
     /// Ends the session under `reason`: its agents discarded, their probes settled as `session_ended`, its rows filed
     /// for removal and its entry gone.
     fn remove_session(&mut self, key: &SessionKey, reason: Reason) {
-        let changes =
-            self.warming
-                .discard_session(&self.sessions, key, reason, Some(Wasted::SessionEnded));
-        self.apply_changes(changes);
+        self.warm(|w, s| w.discard_session(s, key, reason, Some(Wasted::SessionEnded)));
         self.forget_session(key);
         self.warming.drop_records(key);
         self.sessions.remove_session(key);
@@ -481,8 +472,7 @@ impl Engine {
             dropped,
             "the keepalive subscriber fell behind the bus, so the pending observations were discarded"
         );
-        let changes = inner.warming.bus_gap(&inner.sessions, self.now());
-        inner.apply_changes(changes);
+        inner.warm(|w, s| w.bus_gap(s, self.now()));
     }
 
     pub fn parts_bus(&self) -> Bus {
@@ -581,21 +571,15 @@ impl Engine {
             inner.warming.count(Reason::InstanceMismatch);
             return;
         }
-        let (changes, arriving) =
-            inner
-                .warming
-                .arrival_guard(&inner.sessions, &key, &agent_id, &observed, &resolve, now);
-        inner.apply_changes(changes);
-        let Some(arriving) = arriving else {
+        let Some(arriving) =
+            inner.warm_with(|w, s| w.arrival_guard(s, &key, &agent_id, &observed, &resolve, now))
+        else {
             return;
         };
         let poisoned = self.gap_backlog.load(Ordering::SeqCst) > 0;
         // The recipe set aside waits for this request's completion, so each return below that takes no observation
         // drops it: nothing would complete to restore it.
-        let changes = inner
-            .warming
-            .set_aside(&inner.sessions, &key, &agent_id, now);
-        inner.apply_changes(changes);
+        inner.warm(|w, s| w.set_aside(s, &key, &agent_id, now));
         let slot = inner.sessions.arrival_slot(&key, now);
         inner.touch_session(&key);
         let refused = match slot {
@@ -609,35 +593,26 @@ impl Engine {
             inner
                 .warming
                 .arrival_seen(&key, &agent_id, &observed.canonical_model, now);
-            let changes = inner
-                .warming
-                .arrival_refuse(&inner.sessions, &key, &agent_id, reason);
-            inner.apply_changes(changes);
+            inner.warm(|w, s| w.arrival_refuse(s, &key, &agent_id, reason));
             return;
         }
         if inner.sessions.arrival_busy(&key, &agent_id, now) == Arrived::Unknown {
-            let changes = inner.warming.arrival_refuse(
-                &inner.sessions,
-                &key,
-                &agent_id,
-                Reason::AgentUnknown,
-            );
-            inner.apply_changes(changes);
+            inner.warm(|w, s| w.arrival_refuse(s, &key, &agent_id, Reason::AgentUnknown));
             return;
         }
-        let changes = inner.warming.arrival_arm(
-            &inner.sessions,
-            &key,
-            &agent_id,
-            &observed,
-            now,
-            arrival_refusal,
-            prebuilt,
-            build,
-            arriving,
-            poisoned,
-        );
-        inner.apply_changes(changes);
+        inner.warm(|w, s| {
+            w.arrival_arm(
+                s,
+                &key,
+                &agent_id,
+                &observed,
+                now,
+                arrival_refusal,
+                move || prebuilt.unwrap_or_else(build),
+                arriving,
+                poisoned,
+            )
+        });
     }
 
     fn on_selected(&self, selected: AccountSelected) {
@@ -649,27 +624,17 @@ impl Engine {
         let snapshot = self.parts.router.snapshot();
         let mut inner = self.lock();
         let inner = &mut *inner;
-        if inner.warming.compaction_open(&selected.request_id) {
-            if inner.quiesced() {
-                return;
+        match inner.route(&selected.request_id) {
+            None => {}
+            Some(Followed::Compaction) => {
+                inner
+                    .warming
+                    .on_compaction_selected(&inner.sessions, selected, funding);
             }
-            inner
-                .warming
-                .on_compaction_selected(&inner.sessions, selected, funding);
-            return;
+            Some(Followed::Agent(key, agent_id)) => {
+                inner.warm(|w, s| w.on_selected(s, &key, &agent_id, selected, funding, &snapshot))
+            }
         }
-        let Some((key, agent_id)) = inner.followed(&selected.request_id) else {
-            return;
-        };
-        let changes = inner.warming.on_selected(
-            &inner.sessions,
-            &key,
-            &agent_id,
-            selected,
-            funding,
-            &snapshot,
-        );
-        inner.apply_changes(changes);
     }
 
     fn on_head(&self, head: ResponseHead) {
@@ -678,22 +643,17 @@ impl Engine {
             == Some(true);
         let mut inner = self.lock();
         let inner = &mut *inner;
-        if inner.warming.compaction_open(&head.request_id) {
-            if inner.quiesced() {
-                return;
+        match inner.route(&head.request_id) {
+            None => {}
+            Some(Followed::Compaction) => {
+                inner
+                    .warming
+                    .on_compaction_head(&inner.sessions, &head, in_overage);
             }
-            inner
-                .warming
-                .on_compaction_head(&inner.sessions, &head, in_overage);
-            return;
+            Some(Followed::Agent(key, agent_id)) => {
+                inner.warm(|w, s| w.on_head(s, &key, &agent_id, &head, in_overage));
+            }
         }
-        let Some((key, agent_id)) = inner.followed(&head.request_id) else {
-            return;
-        };
-        let changes = inner
-            .warming
-            .on_head(&inner.sessions, &key, &agent_id, &head, in_overage);
-        inner.apply_changes(changes);
     }
 
     fn on_chunk(&self, chunk: ResponseChunk) {
@@ -705,51 +665,37 @@ impl Engine {
         };
         let mut inner = self.lock();
         let inner = &mut *inner;
-        if inner.warming.compaction_open(&chunk.request_id) {
-            if inner.quiesced() {
-                return;
+        match inner.route(&chunk.request_id) {
+            None => {}
+            Some(Followed::Compaction) => {
+                inner
+                    .warming
+                    .on_compaction_chunk(&inner.sessions, &chunk, usage);
             }
-            inner
-                .warming
-                .on_compaction_chunk(&inner.sessions, &chunk, usage);
-            return;
+            Some(Followed::Agent(key, agent_id)) => {
+                inner.warm(|w, s| w.on_chunk(s, &key, &agent_id, &chunk, usage));
+            }
         }
-        let Some((key, agent_id)) = inner.followed(&chunk.request_id) else {
-            return;
-        };
-        let changes = inner
-            .warming
-            .on_chunk(&inner.sessions, &key, &agent_id, &chunk, usage);
-        inner.apply_changes(changes);
     }
 
     fn on_complete(&self, complete: RequestComplete) {
         let now = self.now();
         let mut guard = self.lock();
         let inner = &mut *guard;
-        if inner.warming.compaction_open(&complete.request_id) {
-            if inner.quiesced() {
-                return;
+        if !inner.warming.compaction_open(&complete.request_id) {
+            if let Some(mark) = inner.warming.take_chain_mark(&complete.request_id) {
+                self.read_chain_mark(inner, mark, &complete, now);
             }
-            let (changes, credit) =
-                inner
-                    .warming
-                    .complete_compaction(&inner.sessions, &complete, now);
-            inner.apply_changes(changes);
-            self.book_credit(guard, credit, &complete);
-            return;
         }
-        if let Some(mark) = inner.warming.take_chain_mark(&complete.request_id) {
-            self.read_chain_mark(inner, mark, &complete, now);
-        }
-        let Some((key, agent_id)) = inner.followed(&complete.request_id) else {
-            return;
+        let credit = match inner.route(&complete.request_id) {
+            None => return,
+            Some(Followed::Compaction) => {
+                inner.warm_with(|w, s| w.complete_compaction(s, &complete, now))
+            }
+            Some(Followed::Agent(key, agent_id)) => {
+                inner.warm_with(|w, s| w.on_complete(s, &key, &agent_id, &complete, now))
+            }
         };
-        let (changes, credit) =
-            inner
-                .warming
-                .on_complete(&inner.sessions, &key, &agent_id, &complete, now);
-        inner.apply_changes(changes);
         self.book_credit(guard, credit, &complete);
     }
 
@@ -824,6 +770,12 @@ impl Engine {
     }
 }
 
+/// What a request event's request id names: a compaction open on an agent, or the agent whose observation follows it.
+enum Followed {
+    Compaction,
+    Agent(SessionKey, String),
+}
+
 impl Inner {
     /// Whether the engine is closed, counting the event that meets it as a late update.
     fn quiesced(&mut self) -> bool {
@@ -833,15 +785,39 @@ impl Inner {
         self.closed
     }
 
-    /// The agent following `request_id`, `None` for a request no agent follows and for any once the engine is
-    /// closed. After the quiesce the last save holds each agent as it stood then, so a later event is refused and
-    /// counted: a completion earns no credit and arms nothing, and the relay has answered the client either way.
-    fn followed(&mut self, request_id: &str) -> Option<(SessionKey, String)> {
-        let followed = self.warming.follower(request_id)?;
+    /// Where a request event on `request_id` goes: the compaction open under it, read ahead of the agent's observation
+    /// so the observation's paths never see a compaction, else the agent following it. `None` for a request neither
+    /// follows and for any once the engine is closed. After the quiesce the last save holds each agent as it stood
+    /// then, so a later event is refused and counted: a completion earns no credit and arms nothing, and the relay has
+    /// answered the client either way.
+    fn route(&mut self, request_id: &str) -> Option<Followed> {
+        let followed = if self.warming.compaction_open(request_id) {
+            Followed::Compaction
+        } else {
+            let (key, agent_id) = self.warming.follower(request_id)?;
+            Followed::Agent(key, agent_id)
+        };
         if self.quiesced() {
             return None;
         }
         Some(followed)
+    }
+
+    /// A warming call with the changes it leaves applied. The session state goes over shared, since no function of the
+    /// warming writes it.
+    fn warm(&mut self, call: impl FnOnce(&mut WarmingState, &SessionsState) -> Changes) {
+        let changes = call(&mut self.warming, &self.sessions);
+        self.apply_changes(changes);
+    }
+
+    /// `warm` for a call that answers a value beside its changes.
+    fn warm_with<T>(
+        &mut self,
+        call: impl FnOnce(&mut WarmingState, &SessionsState) -> (Changes, T),
+    ) -> T {
+        let (changes, value) = call(&mut self.warming, &self.sessions);
+        self.apply_changes(changes);
+        value
     }
 }
 
@@ -862,14 +838,10 @@ impl Engine {
             }
             inner.sweep(now);
             inner.drop_sessions_of_dead_keys(&snapshot);
-            let changes = inner
-                .warming
-                .advance_idle_episodes(&inner.sessions, &snapshot, now);
-            inner.apply_changes(changes);
+            inner.warm(|w, s| w.advance_idle_episodes(s, &snapshot, now));
             // A probe the ceiling wrote off keeps its entry alive for a turn that may still read it, so the write-off
             // waits for the entry's own end, whether or not any recipe is still retained.
-            let changes = inner.warming.settle_lapsed_pending(&inner.sessions, now);
-            inner.apply_changes(changes);
+            inner.warm(|w, s| w.settle_lapsed_pending(s, now));
             inner
                 .warming
                 .anything_retained(&inner.sessions)
@@ -890,23 +862,25 @@ impl Engine {
                 return;
             }
             let mut lapsed: Vec<Skipped> = Vec::new();
-            let changes = inner
-                .warming
-                .follow_resolutions(&inner.sessions, &view.canonical);
-            inner.apply_changes(changes);
+            inner.warm(|w, s| w.follow_resolutions(s, &view.canonical));
             let mut due: Vec<(i64, SessionKey, String, Holder)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
                 .entries
                 .iter()
-                .flat_map(|(key, s)| s.agents.keys().map(move |a| (key.clone(), a.clone())))
+                .flat_map(|(key, s)| s.agents.keys().map(move |a| (key, a)))
+                .filter(|(key, a)| inner.sessions.live(key, a))
+                .filter(|(key, a)| {
+                    let warming = inner.warming.held(key, a);
+                    warming.current.is_some() && warming.compaction.is_none()
+                })
+                .map(|(key, a)| (key.clone(), a.clone()))
                 .collect();
             for (key, agent_id) in candidates {
                 if !inner.sessions.live(&key, &agent_id) {
                     continue;
                 }
-                let warming =
-                    warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
+                let warming = inner.warming.held(&key, &agent_id);
                 // The ceilings and the gate run for every retained recipe, armed or not: a pause clears the
                 // schedule, so an opt-out could otherwise never discard a recipe paused by a 429 and a ceiling
                 // could never settle it while the companion keeps reporting. A recipe an open compaction holds
@@ -937,14 +911,7 @@ impl Engine {
                         Ok((pool, policy))
                     }
                     Err(Gate::Drop(reason, label)) => {
-                        let changes = inner.warming.discard(
-                            &inner.sessions,
-                            &key,
-                            &agent_id,
-                            reason,
-                            Some(label),
-                        );
-                        inner.apply_changes(changes);
+                        inner.warm(|w, s| w.discard(s, &key, &agent_id, reason, Some(label)));
                         continue;
                     }
                     Err(Gate::Hold(reason)) => Err(reason),
@@ -971,25 +938,13 @@ impl Engine {
                 let (pool, policy) = match refreshed {
                     Ok(refreshed) => refreshed,
                     Err(reason) => {
-                        let (changes, done) =
-                            inner
-                                .warming
-                                .lapse(&inner.sessions, &key, &agent_id, now, &mut lapsed);
-                        inner.apply_changes(changes);
-                        if done {
+                        if inner.warm_with(|w, s| w.lapse(s, &key, &agent_id, now, &mut lapsed)) {
                             continue;
                         }
                         // A paused recipe keeps its own reason, as under the ceilings' hold below: the pause already
                         // withholds every probe until the next real request.
-                        if !warming_ref(&inner.warming.agents, &key, &agent_id)
-                            .expect(AGENT_HELD)
-                            .paused
-                        {
-                            let changes =
-                                inner
-                                    .warming
-                                    .hold(&inner.sessions, &key, &agent_id, reason, now);
-                            inner.apply_changes(changes);
+                        if !inner.warming.held(&key, &agent_id).paused {
+                            inner.warm(|w, s| w.hold(s, &key, &agent_id, reason, now));
                         }
                         continue;
                     }
@@ -998,27 +953,18 @@ impl Engine {
                 // below ends `horizon`: nothing else rewrites it before the next probe, and until then an armed recipe
                 // would read held with no next probe. A recipe whose request has not brought its evidence yet goes
                 // back to waiting for it.
-                if warming_ref(&inner.warming.agents, &key, &agent_id)
-                    .expect(AGENT_HELD)
-                    .reason
-                    == Reason::PoolDisabled
-                {
+                if inner.warming.held(&key, &agent_id).reason == Reason::PoolDisabled {
                     let resumed = if ready {
                         Reason::Scheduled
                     } else {
                         Reason::AwaitingCacheEvidence
                     };
-                    let changes =
-                        inner
-                            .warming
-                            .set_reason(&inner.sessions, &key, &agent_id, resumed);
-                    inner.apply_changes(changes);
+                    inner.warm(|w, s| w.set_reason(s, &key, &agent_id, resumed));
                 }
                 let verdict = {
                     let session = &inner.sessions.entries[&key];
                     let agent = &session.agents[&agent_id];
-                    let warming =
-                        warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
+                    let warming = inner.warming.held(&key, &agent_id);
                     let ceilings = ceilings_for(warming, policy, &view, &rows);
                     ceiling(
                         agent,
@@ -1029,99 +975,64 @@ impl Engine {
                     )
                 };
                 match verdict {
-                    Verdict::End(Reason::IdleLimit) => {
-                        let changes = inner.warming.end_observation(
-                            &inner.sessions,
-                            &key,
-                            &agent_id,
-                            Some(Wasted::IdleLimit),
-                            Unanswered::Keep,
-                        );
-                        inner.apply_changes(changes);
-                        let changes = inner.warming.set_reason(
-                            &inner.sessions,
-                            &key,
-                            &agent_id,
-                            Reason::IdleLimit,
-                        );
-                        inner.apply_changes(changes);
+                    Verdict::IdleLimit => {
+                        inner.warm(|w, s| {
+                            w.end_observation(
+                                s,
+                                &key,
+                                &agent_id,
+                                Some(Wasted::IdleLimit),
+                                Unanswered::Keep,
+                            )
+                        });
+                        inner.warm(|w, s| w.set_reason(s, &key, &agent_id, Reason::IdleLimit));
                         continue;
                     }
-                    Verdict::End(reason) => {
-                        let changes = inner.warming.discard(
-                            &inner.sessions,
-                            &key,
-                            &agent_id,
-                            reason,
-                            wasted_label(reason),
-                        );
-                        inner.apply_changes(changes);
+                    Verdict::ParkedLimit => {
+                        inner.warm(|w, s| {
+                            w.discard(
+                                s,
+                                &key,
+                                &agent_id,
+                                Reason::ParkedLimit,
+                                Some(Wasted::ParkedLimit),
+                            )
+                        });
                         continue;
                     }
-                    Verdict::Hold(reason) => {
+                    Verdict::Horizon => {
                         // A held recipe still ends at its entry's expiry: a cold body is worth nothing to the wake.
-                        let (changes, done) =
-                            inner
-                                .warming
-                                .lapse(&inner.sessions, &key, &agent_id, now, &mut lapsed);
-                        inner.apply_changes(changes);
-                        if done {
+                        if inner.warm_with(|w, s| w.lapse(s, &key, &agent_id, now, &mut lapsed)) {
                             continue;
                         }
-                        let warming =
-                            warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-                        let (paused, began) = (warming.paused, warming.reason != reason);
+                        let warming = inner.warming.held(&key, &agent_id);
+                        let (paused, began) = (warming.paused, warming.reason != Reason::Horizon);
                         // The probes paid so far kept nothing the wake will read, so they are written off as the
                         // hold begins. A paused recipe keeps its own reason and is written off on every held tick,
                         // which finds nothing left after the first.
                         if began || paused {
-                            if let Some(label) = wasted_label(reason) {
-                                let changes = inner.warming.settle_unanswered(
-                                    &inner.sessions,
-                                    &key,
-                                    &agent_id,
-                                    label,
-                                );
-                                inner.apply_changes(changes);
-                            }
+                            inner.warm(|w, s| {
+                                w.settle_unanswered(s, &key, &agent_id, Wasted::Horizon)
+                            });
                         }
                         if !paused {
-                            let changes =
-                                inner
-                                    .warming
-                                    .hold(&inner.sessions, &key, &agent_id, reason, now);
-                            inner.apply_changes(changes);
+                            inner.warm(|w, s| w.hold(s, &key, &agent_id, Reason::Horizon, now));
                         }
                         continue;
                     }
                     Verdict::Probe => {
-                        if warming_ref(&inner.warming.agents, &key, &agent_id)
-                            .expect(AGENT_HELD)
-                            .reason
-                            == Reason::Horizon
-                        {
-                            let changes = inner.warming.set_reason(
-                                &inner.sessions,
-                                &key,
-                                &agent_id,
-                                Reason::Scheduled,
-                            );
-                            inner.apply_changes(changes);
+                        if inner.warming.held(&key, &agent_id).reason == Reason::Horizon {
+                            inner.warm(|w, s| w.set_reason(s, &key, &agent_id, Reason::Scheduled));
                         }
                     }
                 }
-                let (changes, done) =
-                    inner
-                        .warming
-                        .lapse(&inner.sessions, &key, &agent_id, now, &mut lapsed);
-                inner.apply_changes(changes);
-                if done {
+                if inner.warm_with(|w, s| w.lapse(s, &key, &agent_id, now, &mut lapsed)) {
                     continue;
                 }
                 let held = gate(
                     &view,
                     &inner.sessions.entries[&key].agents[&agent_id],
-                    warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD),
+                    inner.warming.held(&key, &agent_id),
                     &key.1,
                     pool,
                     policy,
@@ -1129,26 +1040,16 @@ impl Engine {
                 );
                 let holder = match held {
                     Err(reason) => {
-                        let changes =
-                            inner
-                                .warming
-                                .hold(&inner.sessions, &key, &agent_id, reason, now);
-                        inner.apply_changes(changes);
+                        inner.warm(|w, s| w.hold(s, &key, &agent_id, reason, now));
                         continue;
                     }
                     Ok(holder) => holder,
                 };
-                if !ready
-                    || warming_ref(&inner.warming.agents, &key, &agent_id)
-                        .expect(AGENT_HELD)
-                        .in_flight
-                {
+                let warming = inner.warming.held(&key, &agent_id);
+                if !ready || warming.in_flight {
                     continue;
                 }
-                let Some(at) = warming_ref(&inner.warming.agents, &key, &agent_id)
-                    .expect(AGENT_HELD)
-                    .due_at()
-                else {
+                let Some(at) = warming.due_at() else {
                     continue;
                 };
                 if at <= now {
@@ -1161,11 +1062,7 @@ impl Engine {
                 if inner.warming.running >= MAX_WORKERS {
                     break;
                 }
-                let (changes, job) =
-                    inner
-                        .warming
-                        .dispatch_probe(&inner.sessions, &key, &agent_id, holder, now);
-                inner.apply_changes(changes);
+                let job = inner.warm_with(|w, s| w.dispatch_probe(s, &key, &agent_id, holder, now));
                 // The tracker counts the job from here, under the lock that reserved the worker: the spawn
                 // below happens after the lock is released, and a `shutdown` that passes between the two
                 // would otherwise find an empty tracker and return while this job was still to come.
@@ -1215,11 +1112,7 @@ impl Engine {
             inner.warming.release_probe_slot(&inner.sessions, job);
             return;
         }
-        let changes =
-            inner
-                .warming
-                .apply_probe(&inner.sessions, job, exchange, record, covered_unit, now);
-        inner.apply_changes(changes);
+        inner.warm(|w, s| w.apply_probe(s, job, exchange, record, covered_unit, now));
     }
 }
 
@@ -1315,12 +1208,7 @@ impl Engine {
             .map(|s| {
                 s.agents
                     .iter()
-                    .filter(|(agent_id, _)| {
-                        warming_ref(&inner.warming.agents, &key, agent_id)
-                            .expect(AGENT_HELD)
-                            .current
-                            .is_some()
-                    })
+                    .filter(|(agent_id, _)| inner.warming.held(&key, agent_id).current.is_some())
                     .map(|(_, a)| a.id.clone())
                     .collect()
             })

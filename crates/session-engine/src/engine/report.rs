@@ -7,6 +7,7 @@ use std::sync::Arc;
 use phoebis_routing::{RegistrySnapshot, Report};
 use phoebis_store::FactsKind;
 
+use crate::engine::persist::persist_key_of;
 use crate::engine::{Engine, Inner};
 use crate::sessions::events::{
     err, left_out, Ack, AgentStartKind, EventError, EventReport, MainStart, Reported, StartKind,
@@ -115,7 +116,7 @@ impl Inner {
             }
             Reported::Heartbeat => {}
             Reported::SessionFacts { facts } => {
-                let row = (key.0.clone(), key_generation, key.1.clone());
+                let row = persist_key_of(&key, key_generation);
                 self.file_facts(&row, FactsKind::Project, "", facts.project_value(), now);
                 self.file_facts(&row, FactsKind::Title, "", facts.title_value(), now);
                 filed_facts = true;
@@ -124,14 +125,15 @@ impl Inner {
                 let agents: Vec<String> =
                     self.sessions.entries[&key].agents.keys().cloned().collect();
                 for agent_id in &agents {
-                    let changes = self.warming.discard(
-                        &self.sessions,
-                        &key,
-                        agent_id,
-                        Reason::SessionEnded,
-                        Some(Wasted::SessionEnded),
-                    );
-                    self.apply_changes(changes);
+                    self.warm(|w, s| {
+                        w.discard(
+                            s,
+                            &key,
+                            agent_id,
+                            Reason::SessionEnded,
+                            Some(Wasted::SessionEnded),
+                        )
+                    });
                     self.sessions
                         .set_state(&key, agent_id, AgentState::Released, now);
                     // A session's end is no return, so main's window ends with it.
@@ -160,16 +162,14 @@ impl Inner {
                 .agent_start_check(&key, &agent_id, *request_generation)?
             {
                 AgentStartKind::Restart => {
-                    let changes = self.warming.restart(&self.sessions, &key, &agent_id);
-                    self.apply_changes(changes);
+                    self.warm(|w, s| w.restart(s, &key, &agent_id));
                     self.sessions.restart_agent(&key, &agent_id, now);
                     // The resume moves the idle window's start on purpose, so the floor the release left goes.
                     self.warming.clear_idle_floor(&key, &agent_id);
                 }
                 AgentStartKind::New => {
                     self.sessions.add_agent(&key, &agent_id, now);
-                    let changes = self.warming.admit(&self.sessions, &key, &agent_id, now);
-                    self.apply_changes(changes);
+                    self.warm(|w, s| w.admit(s, &key, &agent_id, now));
                 }
             },
             Reported::Activity {
@@ -203,7 +203,7 @@ impl Inner {
                 // activity.
                 self.sessions
                     .check_agent(&key, &agent_id, *request_generation)?;
-                let row = (key.0.clone(), key_generation, key.1.clone());
+                let row = persist_key_of(&key, key_generation);
                 self.file_facts(&row, FactsKind::Agents, &agent_id, facts.value(), now);
                 filed_facts = true;
             }
@@ -243,25 +243,19 @@ impl Inner {
                 self.sessions.set_state(&key, &agent_id, state, now);
                 match state {
                     AgentState::Released => {
-                        let changes = self.warming.discard(
-                            &self.sessions,
-                            &key,
-                            &agent_id,
-                            Reason::AgentReleased,
-                            Some(Wasted::Released),
-                        );
-                        self.apply_changes(changes);
+                        self.warm(|w, s| {
+                            w.discard(
+                                s,
+                                &key,
+                                &agent_id,
+                                Reason::AgentReleased,
+                                Some(Wasted::Released),
+                            )
+                        });
                         self.release_record(&key, &agent_id, now, snapshot);
                     }
                     AgentState::Unknown => {
-                        let changes = self.warming.discard(
-                            &self.sessions,
-                            &key,
-                            &agent_id,
-                            Reason::AgentUnknown,
-                            None,
-                        );
-                        self.apply_changes(changes);
+                        self.warm(|w, s| w.discard(s, &key, &agent_id, Reason::AgentUnknown, None));
                     }
                     _ => {}
                 }
@@ -300,9 +294,6 @@ impl Inner {
         now: i64,
         snapshot: &RegistrySnapshot,
     ) {
-        if agent_ref(&self.sessions.entries, key, agent_id).is_none() {
-            return;
-        }
         let leaves_at = self.warming.leave_after(key, agent_id, snapshot, now);
         self.sessions.set_leave(key, agent_id, leaves_at);
         self.touch_agent(key, agent_id);
@@ -328,27 +319,21 @@ impl Inner {
                 MainStart::Revived => {
                     // The resume moves the idle window's start on purpose, so the floor the release left goes.
                     self.warming.clear_idle_floor(&key, MAIN_AGENT);
-                    let changes = self.warming.await_request(&self.sessions, &key, MAIN_AGENT);
-                    self.apply_changes(changes);
+                    self.warm(|w, s| w.await_request(s, &key, MAIN_AGENT));
                 }
                 MainStart::New => {
-                    let changes = self.warming.admit(&self.sessions, &key, MAIN_AGENT, now);
-                    self.apply_changes(changes);
+                    self.warm(|w, s| w.admit(s, &key, MAIN_AGENT, now));
                 }
                 MainStart::Kept => {}
             }
             // No tick reads the session's option, so a prompt held from before the turn would go on being warmed.
             if started.warming_turned_off {
-                let changes = self.warming.discard_warming_of(
-                    &self.sessions,
-                    &key,
-                    Reason::SessionOptedOut,
-                    Wasted::Released,
-                );
-                self.apply_changes(changes);
+                self.warm(|w, s| {
+                    w.discard_warming_of(s, &key, Reason::SessionOptedOut, Wasted::Released)
+                });
             }
             // An install that turned a kind off would otherwise keep the sets that an earlier run stored.
-            let row = (key.0.clone(), key_generation, key.1.clone());
+            let row = persist_key_of(&key, key_generation);
             let mut filed_facts = false;
             for kind in left_out(reported_facts) {
                 self.file_kind_leave(&row, kind);
@@ -361,13 +346,9 @@ impl Inner {
             });
         }
         if kind == StartKind::Replacement {
-            let changes = self.warming.discard_session(
-                &self.sessions,
-                &key,
-                Reason::InstanceReplaced,
-                Some(Wasted::Replaced),
-            );
-            self.apply_changes(changes);
+            self.warm(|w, s| {
+                w.discard_session(s, &key, Reason::InstanceReplaced, Some(Wasted::Replaced))
+            });
             // Filed under the generation the replaced rows were saved under: a start under a new generation leaves
             // one removal for the old row and one write for the new, so a load never meets both.
             self.forget_session(&key);
@@ -377,15 +358,14 @@ impl Inner {
             .register(&key, key_generation, report, cache_warming, now);
         // The session's own sets start over with the record whatever the list says, and its agents' stored sets stay
         // for the earlier agents that no report states again, unless the list leaves the kind out.
-        let row = (key.0.clone(), key_generation, key.1.clone());
+        let row = persist_key_of(&key, key_generation);
         self.file_kind_leave(&row, FactsKind::Project);
         self.file_kind_leave(&row, FactsKind::Title);
         if !reported_facts.contains(&FactsKind::Agents) {
             self.file_kind_leave(&row, FactsKind::Agents);
         }
         self.touch_session(&key);
-        let changes = self.warming.admit(&self.sessions, &key, MAIN_AGENT, now);
-        self.apply_changes(changes);
+        self.warm(|w, s| w.admit(s, &key, MAIN_AGENT, now));
         Ok(Applied {
             ack: self.sessions.acknowledge_start(&key),
             filed_facts: true,

@@ -867,7 +867,7 @@ pub(crate) fn ceiling(
         return if now - since < ceilings.idle_ms {
             Verdict::Probe
         } else {
-            Verdict::End(Reason::IdleLimit)
+            Verdict::IdleLimit
         };
     }
     let main = agent.id == MAIN_AGENT;
@@ -882,7 +882,7 @@ pub(crate) fn ceiling(
             // A park that passed leaves a worker parked with no park until the mod restates it, and a restored
             // row with no kind lands here too: no rule says probe for a park that ended.
             let Some(held) = agent.park else {
-                return Verdict::End(Reason::ParkedLimit);
+                return Verdict::ParkedLimit;
             };
             let park = held.park;
             if park.kind().background() && now - held.began < ceilings.parked_ms {
@@ -892,23 +892,14 @@ pub(crate) fn ceiling(
                 Some(wake) if wake - now <= ceilings.horizon_ms => Verdict::Probe,
                 // The wake is a certain return the hold keeps the prompt for, so it outranks a command's part
                 // whose ceiling ran out.
-                Some(_) => Verdict::Hold(Reason::Horizon),
-                None => Verdict::End(Reason::ParkedLimit),
+                Some(_) => Verdict::Horizon,
+                None => Verdict::ParkedLimit,
             }
         }
         AgentState::Busy if !main => Verdict::Probe,
         // A subagent is busy, parked or released: in any other state no rule says probe for it.
-        _ if !main => Verdict::End(Reason::ParkedLimit),
-        _ => Verdict::End(Reason::IdleLimit),
-    }
-}
-
-pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
-    match reason {
-        Reason::Horizon => Some(Wasted::Horizon),
-        Reason::IdleLimit => Some(Wasted::IdleLimit),
-        Reason::ParkedLimit => Some(Wasted::ParkedLimit),
-        _ => None,
+        _ if !main => Verdict::ParkedLimit,
+        _ => Verdict::IdleLimit,
     }
 }
 

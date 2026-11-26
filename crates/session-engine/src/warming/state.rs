@@ -186,6 +186,12 @@ impl WarmingState {
         self.agents.remove(key);
     }
 
+    /// The warming's record of an agent the session engine holds. Both records of an agent are made and dropped in the
+    /// same hold, so a held agent without the warming's record panics.
+    pub(crate) fn held(&self, key: &SessionKey, agent_id: &str) -> &AgentWarming {
+        warming_ref(&self.agents, key, agent_id).expect(AGENT_HELD)
+    }
+
     pub(crate) fn in_flight(&self, key: &SessionKey, agent_id: &str) -> bool {
         warming_ref(&self.agents, key, agent_id)
             .expect(AGENT_HELD)

@@ -7,9 +7,9 @@ use std::sync::Arc;
 use phoebis_ledger::KeepaliveGaugeSource;
 
 use crate::engine::Engine;
-use crate::sessions::state::{Agent, AgentState, Park, ParkKind, AGENT_HELD};
+use crate::sessions::state::{Agent, AgentState, Park, ParkKind};
 use crate::sessions::view::CompanionState;
-use crate::warming::agent::{warming_ref, AgentWarming};
+use crate::warming::agent::AgentWarming;
 use crate::warming::causes::Reason;
 use crate::warming::guard::Guard;
 use crate::warming::view::{AgentCounts, KeepaliveSummary, RecipeState};
@@ -126,25 +126,20 @@ impl Engine {
             .sessions
             .entries
             .iter()
-            .map(|(key, s)| {
-                let warming_of = |agent_id: &str| {
-                    warming_ref(&inner.warming.agents, key, agent_id).expect(AGENT_HELD)
-                };
-                SessionView {
-                    agents: s.agents.len(),
-                    companion: s.companion(),
-                    companion_since: s.companion_since(),
-                    key_id: key.0.clone(),
-                    key_generation: s.key_generation,
-                    keepalive: inner.warming.summary(key, s),
-                    lifecycles: s
-                        .agents
-                        .iter()
-                        .map(|(id, a)| (id.clone(), Lifecycle::of(a, warming_of(id))))
-                        .collect(),
-                    presence_age_seconds: s.presence_age_seconds(now),
-                    session_id: key.1.clone(),
-                }
+            .map(|(key, s)| SessionView {
+                agents: s.agents.len(),
+                companion: s.companion(),
+                companion_since: s.companion_since(),
+                key_id: key.0.clone(),
+                key_generation: s.key_generation,
+                keepalive: inner.warming.summary(key, s),
+                lifecycles: s
+                    .agents
+                    .iter()
+                    .map(|(id, a)| (id.clone(), Lifecycle::of(a, inner.warming.held(key, id))))
+                    .collect(),
+                presence_age_seconds: s.presence_age_seconds(now),
+                session_id: key.1.clone(),
             })
             .collect()
     }
@@ -156,20 +151,11 @@ impl Engine {
         self.expire();
         let now = self.now();
         let inner = self.lock();
-        let warming_agents = &inner.warming.agents;
         inner
-            .sessions
-            .entries
-            .iter()
-            .flat_map(|(key, s)| {
-                s.agents
-                    .iter()
-                    .map(move |(id, a)| {
-                        (a, warming_ref(warming_agents, key, id).expect(AGENT_HELD))
-                    })
-                    .filter(|(_, warming)| warming.last_real_at.is_some())
-                    .map(move |(a, warming)| recipe_of(a, warming, &key.0, &key.1, now))
-            })
+            .warming
+            .with_agents(&inner.sessions)
+            .filter(|(_, _, warming)| warming.last_real_at.is_some())
+            .map(|(key, a, warming)| recipe_of(a, warming, &key.0, &key.1, now))
             .collect()
     }
 

@@ -13,12 +13,14 @@ use crate::warming::breakeven::{resolve_or_shipped, Ceilings, FactorRows, Fundin
 use crate::warming::causes::{Reason, Wasted};
 use crate::warming::config::{floor_ttl_ms, KeepalivePolicy};
 
-/// What the ceilings decide for one retained recipe at a tick: probe on, hold the recipe with a reason, or end it.
+/// What the ceilings decide for one retained recipe at a tick: probe on, hold the recipe under `horizon` while its wake
+/// lies beyond the horizon, or end it under `idle_limit` or `parked_limit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Verdict {
     Probe,
-    Hold(Reason),
-    End(Reason),
+    Horizon,
+    IdleLimit,
+    ParkedLimit,
 }
 
 pub(crate) struct RouterView {

@@ -4,7 +4,7 @@
 use phoebis_ledger::KeepaliveAgents;
 
 use crate::sessions::state::{
-    AgentState, Session, SessionKey, SessionsState, AGENT_HELD, MAIN_AGENT,
+    Agent, AgentState, Session, SessionKey, SessionsState, AGENT_HELD, MAIN_AGENT,
 };
 use crate::warming::agent::{warming_ref, AgentWarming};
 use crate::warming::causes::Reason;
@@ -194,18 +194,24 @@ impl WarmingState {
         }
     }
 
+    /// Every agent the session engine holds, with its session's key and its warming record: the one walk that the
+    /// recipes route and the agent gauge read, so the two views visit the same agents.
+    pub(crate) fn with_agents<'a>(
+        &'a self,
+        sessions: &'a SessionsState,
+    ) -> impl Iterator<Item = (&'a SessionKey, &'a Agent, &'a AgentWarming)> + 'a {
+        sessions.entries.iter().flat_map(move |(key, s)| {
+            s.agents
+                .iter()
+                .map(move |(id, a)| (key, a, self.held(key, id)))
+        })
+    }
+
     pub(crate) fn agent_counts(&self, sessions: &SessionsState) -> AgentCounts {
-        let warming_agents = &self.agents;
         let mut counts = AgentCounts::default();
-        for (agent, _) in sessions
-            .entries
-            .iter()
-            .flat_map(|(key, s)| {
-                s.agents.iter().map(move |(id, a)| {
-                    (a, warming_ref(warming_agents, key, id).expect(AGENT_HELD))
-                })
-            })
-            .filter(|(_, warming)| warming.holds_recipe())
+        for (_, agent, _) in self
+            .with_agents(sessions)
+            .filter(|(_, _, warming)| warming.holds_recipe())
         {
             match agent.state {
                 AgentState::Busy => counts.busy += 1,

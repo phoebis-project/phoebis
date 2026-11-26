@@ -286,8 +286,7 @@ impl WarmingState {
         observed: &RequestObserved,
         now: i64,
         arrival_refusal: Option<Reason>,
-        prebuilt: Option<Result<Recipe, Reason>>,
-        build: impl FnOnce() -> Result<Recipe, Reason>,
+        recipe: impl FnOnce() -> Result<Recipe, Reason>,
         arriving: Arriving,
         poisoned: bool,
     ) -> Changes {
@@ -318,7 +317,7 @@ impl WarmingState {
         if self.pending.len() >= sessions.max_agents {
             return self.arrival_refuse(sessions, key, agent_id, Reason::RequestLimit);
         }
-        let built = prebuilt.unwrap_or_else(build);
+        let built = recipe();
         let mut recipe = match built {
             Ok(recipe) => recipe,
             Err(reason) => return self.arrival_refuse(sessions, key, agent_id, reason),
