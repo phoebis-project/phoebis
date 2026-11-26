@@ -72,8 +72,7 @@ impl KeepaliveLimits {
             max_request_bytes as u64,
             512 << 20,
             range,
-        )?;
-        Ok(())
+        )
     }
 }
 

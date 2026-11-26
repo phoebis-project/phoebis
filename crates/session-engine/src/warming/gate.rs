@@ -11,7 +11,7 @@ use crate::sessions::state::Agent;
 use crate::warming::agent::AgentWarming;
 use crate::warming::breakeven::{resolve_or_shipped, Ceilings, FactorRows, Funding};
 use crate::warming::causes::{Reason, Wasted};
-use crate::warming::config::{floor_ttl_ms, KeepalivePolicy, KeepaliveTiming};
+use crate::warming::config::{floor_ttl_ms, KeepalivePolicy};
 
 /// What the ceilings decide for one retained recipe at a tick: probe on, hold the recipe with a reason, or end it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,7 +98,7 @@ pub(crate) fn refresh_policy<'v>(
 
 /// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
 /// at the fast cells for a fast recipe, dollars for an account the view lacks) from the tick's rows, its TTL and the
-/// engine's timing. Tables that give no break-even (no priced row, or a free read) fall back to the shipped price
+/// agent's timing. Tables that give no break-even (no priced row, or a free read) fall back to the shipped price
 /// table's tightest row at the recipe's speed, so a ceiling is never unbounded. A timing whose lead is the whole TTL
 /// leaves no probe interval, and nothing is probed.
 pub(crate) fn ceilings_for(
@@ -106,9 +106,8 @@ pub(crate) fn ceilings_for(
     policy: &KeepalivePolicy,
     view: &RouterView,
     rows: &FactorRows,
-    timing: &KeepaliveTiming,
 ) -> Ceilings {
-    let fast = warming.current.as_ref().is_some_and(|o| o.recipe.fast);
+    let fast = warming.fast();
     let funding = warming
         .account
         .as_deref()
@@ -130,7 +129,7 @@ pub(crate) fn ceilings_for(
             warming.current.as_ref().map_or(0, |o| o.expected),
         ),
         floor_ttl_ms(warming.ttl_ms),
-        timing,
+        &warming.timing,
         fast,
         rows,
     )
@@ -144,12 +143,12 @@ pub(crate) fn ceilings_for(
 }
 
 /// The spec's "Scheduling against router state" row, in its order, after `refresh_policy` answered `pool`. `Err`
-/// names why the due probe waits, or why the recipe goes. `Ok` lets the probe run on the holder it names, the recipe's
-/// holder: the account id with the incarnation the recipe was last answered on. The pinned account's subscription term
-/// holds the probe under `ineligible_credential` once it ended, and while the probe's due time plus its interval (the
-/// TTL less the lead) passes the end, since the cache that probe writes dies at the end. The end is `term::end_of`'s,
-/// the one the router's wind-down reads, so the last interval before a trial end still ahead holds too and probing
-/// resumes once the trial end passes.
+/// names why the due probe waits. `Ok` lets the probe run on the holder it names, the recipe's holder: the account id
+/// with the incarnation the recipe was last answered on. The pinned account's subscription term holds the probe under
+/// `ineligible_credential` once it ended, and while the probe's due time plus its interval (the TTL less the lead)
+/// passes the end, since the cache that probe writes dies at the end. The end is `term::end_of`'s, the one the router's
+/// wind-down reads, so the last interval before a trial end still ahead holds too and probing resumes once the trial
+/// end passes.
 pub(crate) fn gate(
     view: &RouterView,
     agent: &Agent,
@@ -158,27 +157,23 @@ pub(crate) fn gate(
     pool: &PoolRow,
     policy: &KeepalivePolicy,
     now: i64,
-) -> Result<Holder, Gate> {
+) -> Result<Holder, Reason> {
     let key_id = agent.key_id.clone();
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
     // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
     // one-hour one about fifty-four. The save-time floor of 300 s stays the one hard refusal.
     let due_after_ms = floor_ttl_ms(warming.ttl_ms) - warming.timing.lead_ms(warming.ttl_ms);
     if seconds_ms(pool.affinity_ttl_seconds) < due_after_ms {
-        return Err(Gate::Hold(Reason::AffinityTooShort));
+        return Err(Reason::AffinityTooShort);
     }
     if !policy.enabled {
-        return Err(Gate::Hold(Reason::KeepaliveOff));
+        return Err(Reason::KeepaliveOff);
     }
     // A recipe that names no incarnation of its holder cannot tell a re-paired account from the one that answered it,
     // so it waits for the agent's next request, which arms it.
     let Some(incarnation) = warming.account_incarnation else {
-        return Err(Gate::Hold(Reason::PinMoved));
+        return Err(Reason::PinMoved);
     };
-    let holder = warming.account.clone().map(|account_id| Holder {
-        account_id,
-        incarnation,
-    });
     // The probe replays the prompt on the holder that last answered the recipe. A pin that names another holder has
     // moved since, and a probe there would write the whole prompt cold, so the recipe waits for the next request that
     // arms it on the pin's account.
@@ -190,24 +185,28 @@ pub(crate) fn gate(
             agent.id.clone(),
             warming.canonical_model.clone(),
         ))
-        .is_some_and(|pinned| holder.as_ref() != Some(pinned))
+        .is_some_and(|pinned| {
+            warming.account.as_deref() != Some(pinned.account_id.as_str())
+                || pinned.incarnation != incarnation
+        })
     {
-        return Err(Gate::Hold(Reason::PinMoved));
+        return Err(Reason::PinMoved);
     }
-    let Some(holder) = holder else {
-        return Err(Gate::Hold(Reason::Paused));
+    let Some(account_id) = warming.account.as_deref() else {
+        return Err(Reason::Paused);
     };
-    let Some(account) = view.snapshot.account(&holder.account_id) else {
-        return Err(Gate::Hold(Reason::Paused));
+    let Some(account) = view
+        .snapshot
+        .account(account_id)
+        .filter(|account| account.enabled)
+    else {
+        return Err(Reason::Paused);
     };
-    if !account.enabled {
-        return Err(Gate::Hold(Reason::Paused));
-    }
     if matches!(
         account.state,
         AccountState::ReauthRequired | AccountState::FundingRequired
     ) {
-        return Err(Gate::Hold(Reason::Reauth));
+        return Err(Reason::Reauth);
     }
     // A hold rather than a pause, read live on every poll like the budget below: an operator who turns the cancel
     // off, or a profile read that clears the plan-ended flag, releases the probe on the next tick.
@@ -217,14 +216,10 @@ pub(crate) fn gate(
             .zip(phoebis_routing::term::end_of(term, now))
             .is_some_and(|(due, end)| due + due_after_ms > end);
         if last_interval || phoebis_routing::term::ended(term, now) {
-            return Err(Gate::Hold(Reason::IneligibleCredential));
+            return Err(Reason::IneligibleCredential);
         }
     }
-    let fast = warming
-        .current
-        .as_ref()
-        .map(|o| &o.recipe)
-        .is_some_and(|r| r.fast);
+    let fast = warming.fast();
     // The router's own rule decides which live row holds the probe: a fast recipe passes a plan-window row on the
     // account and holds on its own lane's, as a fast request does.
     let cooled = view.cooled.iter().any(|((id, scope), window)| {
@@ -232,11 +227,11 @@ pub(crate) fn gate(
             && phoebis_routing::cooldown_holds(scope, window, &warming.canonical_model, fast)
     });
     if cooled {
-        return Err(Gate::Hold(Reason::Cooled));
+        return Err(Reason::Cooled);
     }
     // A fast recipe draws usage credits, not a plan window, so plan overage does not hold it.
     if !fast && view.overage.contains(&account.id) && pool.overage_policy != OveragePolicy::Allow {
-        return Err(Gate::Hold(Reason::Overage));
+        return Err(Reason::Overage);
     }
     // Read live on every poll like the two holds above: the period's end or a raised budget clears it on the
     // next tick, and a real request that moves the pin clears it, since it arms the recipe on the pin's account.
@@ -244,17 +239,20 @@ pub(crate) fn gate(
         .budgets
         .contains(&(pool.id.clone(), account.id.clone()))
     {
-        return Err(Gate::Hold(Reason::Budget));
+        return Err(Reason::Budget);
     }
     // The selector's own two tests on the pin, read live like the holds above, so such a probe writes no rejected
     // request row at each rung of the ladder. The spend funds every lane, and the credits the fast one alone.
     if view.spent.contains(&account.id) {
-        return Err(Gate::Hold(Reason::Spent));
+        return Err(Reason::Spent);
     }
     if fast && view.credits.contains(&account.id) {
-        return Err(Gate::Hold(Reason::Credits));
+        return Err(Reason::Credits);
     }
-    Ok(holder)
+    Ok(Holder {
+        account_id: account_id.to_owned(),
+        incarnation,
+    })
 }
 
 #[cfg(test)]
@@ -266,7 +264,7 @@ mod tests {
     use crate::sessions::config::SessionCaps;
     use crate::sessions::state::{Session, SessionKey, AGENT_HELD};
     use crate::warming::agent::warming_mut;
-    use crate::warming::config::KeepaliveLimits;
+    use crate::warming::config::{KeepaliveLimits, KeepaliveTiming};
     use crate::warming::observation::Observation;
     use crate::warming::recipe::make_recipe;
     use crate::warming::savings::AttemptFunding;
@@ -383,7 +381,9 @@ mod tests {
         warming.canonical_model = "claude-opus-5-5".into();
         warming.current = Some(observation(fast));
         refresh_policy(view, &agent, &mut warming)
-            .and_then(|(pool, policy, _)| gate(view, &agent, &warming, "s", pool, policy, 0))
+            .and_then(|(pool, policy, _)| {
+                gate(view, &agent, &warming, "s", pool, policy, 0).map_err(Gate::Hold)
+            })
             .err()
     }
 
@@ -415,7 +415,7 @@ revisions:
         warming.current = Some(observation(false));
         let policy = KeepalivePolicy::default();
         let break_even = |warming: &AgentWarming| {
-            ceilings_for(warming, &policy, &pool_view(false), &rows, &timing).break_even_ms
+            ceilings_for(warming, &policy, &pool_view(false), &rows).break_even_ms
         };
         assert_eq!(
             break_even(&warming),
@@ -528,8 +528,9 @@ revisions:
     /// The gate's whole answer for main with the record `warming` under `view`, after the policy's refresh.
     fn gate_of(view: &RouterView, warming: &mut AgentWarming) -> Result<Holder, Gate> {
         let agent = Agent::new("main", "k", 1, 0);
-        refresh_policy(view, &agent, warming)
-            .and_then(|(pool, policy, _)| gate(view, &agent, warming, "s", pool, policy, 0))
+        refresh_policy(view, &agent, warming).and_then(|(pool, policy, _)| {
+            gate(view, &agent, warming, "s", pool, policy, 0).map_err(Gate::Hold)
+        })
     }
 
     fn holder(account: &str, incarnation: u64) -> Holder {

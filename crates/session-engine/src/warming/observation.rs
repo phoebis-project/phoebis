@@ -754,7 +754,7 @@ impl WarmingState {
             started: warming.current.as_ref().map(|o| o.started),
             account: warming.account.clone(),
             model: warming.canonical_model.clone(),
-            fast: warming.current.as_ref().is_some_and(|o| o.recipe.fast),
+            fast: warming.fast(),
             read,
         };
         let probes = std::mem::take(&mut warming.kept);

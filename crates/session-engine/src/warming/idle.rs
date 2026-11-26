@@ -118,6 +118,14 @@ fn idle_returns_key(
         .or_else(|| warming.account.clone())
 }
 
+/// Whether main's state holds an idle window: the opener and the tick's counter read the same states.
+fn holds_idle_window(state: AgentState) -> bool {
+    !matches!(
+        state,
+        AgentState::Busy | AgentState::Released | AgentState::Unknown
+    )
+}
+
 /// Opens main's idle window when none is counted and main is idle or parked, from a start past the floor. The report
 /// that moves main there opens it, so a prompt inside the same second still ends a window, and the tick opens the
 /// ones a presence, a park's end or a load left unopened. True when a window opened.
@@ -126,12 +134,7 @@ pub(crate) fn open_idle_episode(
     warming: &mut AgentWarming,
     snapshot: &RegistrySnapshot,
 ) -> bool {
-    if warming.idle_episode.is_some()
-        || matches!(
-            main.state,
-            AgentState::Busy | AgentState::Released | AgentState::Unknown
-        )
-    {
+    if warming.idle_episode.is_some() || !holds_idle_window(main.state) {
         return false;
     }
     let start = main.idle_window_start();
@@ -157,6 +160,13 @@ pub(crate) fn open_idle_episode(
 }
 
 impl WarmingState {
+    /// The first UTC day the retention keeps when `day` is the newest, `None` for a retention of 0, which keeps every
+    /// day. The roll drops the days before it and a return counts only from it on, so the two agree on the cutoff.
+    fn first_kept_day(&self, day: i64) -> Option<i64> {
+        let retention = self.timing.idle_return_retention_days;
+        (retention != 0).then(|| day - (i64::from(retention) - 1))
+    }
+
     /// Drops the days the retention no longer keeps once `now` falls past the UTC day the counters last counted under,
     /// and records the cutoff for the next save, which takes the registry's rows of those days. The two sites that
     /// count call it, as `AgentWarming::roll_counters_day` is called, and the tick is one of them, so a day leaves
@@ -167,11 +177,9 @@ impl WarmingState {
             return;
         }
         self.idle_returns_day = day;
-        let retention = self.timing.idle_return_retention_days;
-        if retention == 0 {
+        let Some(cutoff) = self.first_kept_day(day) else {
             return;
-        }
-        let cutoff = day - (i64::from(retention) - 1);
+        };
         let mut dropped = false;
         for days in self.idle_returns.values_mut() {
             let kept = days.split_off(&cutoff);
@@ -197,8 +205,6 @@ impl WarmingState {
         let mut changes = Changes::default();
         self.roll_idle_returns_day(now);
         let day = utc_day(now);
-        let mut opened: Vec<SessionKey> = Vec::new();
-        let mut raised: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in sessions.entries.iter() {
             if session.companion() != CompanionState::Reporting {
                 continue;
@@ -206,15 +212,12 @@ impl WarmingState {
             let Some(main) = session.agents.get(MAIN_AGENT) else {
                 continue;
             };
-            if matches!(
-                main.state,
-                AgentState::Busy | AgentState::Released | AgentState::Unknown
-            ) {
+            if !holds_idle_window(main.state) {
                 continue;
             }
             let warming = warming_mut(&mut self.agents, key, MAIN_AGENT).expect(AGENT_HELD);
             if open_idle_episode(main, warming, snapshot) {
-                opened.push(key.clone());
+                changes.agent_row(key, MAIN_AGENT);
             }
             let Some(episode) = warming.idle_episode.as_mut() else {
                 continue;
@@ -228,7 +231,8 @@ impl WarmingState {
             if episode.bucket.is_some_and(|counted| bucket <= counted) {
                 continue;
             }
-            raised.push((key.clone(), episode.pool_key.clone()));
+            changes.agent_row(key, MAIN_AGENT);
+            changes.pool_row(&episode.pool_key);
             raise_reached(
                 self.idle_returns
                     .entry(episode.pool_key.clone())
@@ -240,13 +244,6 @@ impl WarmingState {
             );
             episode.bucket = Some(bucket);
             episode.bucket_day = Some(day);
-        }
-        for key in opened {
-            changes.agent_row(&key, MAIN_AGENT);
-        }
-        for (key, pool) in raised {
-            changes.agent_row(&key, MAIN_AGENT);
-            changes.pool_row(&pool);
         }
         changes
     }
@@ -280,15 +277,16 @@ impl WarmingState {
         // reached (today where this request raised it), and no day answers a return without its reach. Where that
         // day has left at the roll, or a window restored from a row saved without it holds its reach under no day,
         // the return leaves with its reach and counts nothing.
-        let retention = i64::from(self.timing.idle_return_retention_days);
         let return_day = if raised {
             Some(today)
         } else {
-            episode
-                .bucket_day
-                .filter(|day| retention == 0 || *day >= self.idle_returns_day - (retention - 1))
+            episode.bucket_day.filter(|day| {
+                self.first_kept_day(self.idle_returns_day)
+                    .is_none_or(|first| *day >= first)
+            })
         }
         .filter(|_| continues_prefix(episode.anchor.as_ref(), boundaries));
+        changes.agent_row(key, MAIN_AGENT);
         if raised || return_day.is_some() {
             let days = self
                 .idle_returns
@@ -300,9 +298,6 @@ impl WarmingState {
             if let Some(day) = return_day {
                 days.entry(day).or_default().buckets[bucket].returned += 1;
             }
-        }
-        changes.agent_row(key, MAIN_AGENT);
-        if raised || return_day.is_some() {
             changes.pool_row(&episode.pool_key);
         }
         changes
@@ -358,15 +353,14 @@ impl WarmingState {
         // engine spends on it. The lapse is counted once per agent, as the Go engine counted it, but no
         // agent's own reason is rewritten: a recipe the scheduler keeps probing would otherwise read held
         // in every view until its next probe.
-        let agents = sessions.entries[key].agents.len() as u64;
+        let session = &sessions.entries[key];
+        let agents = session.agents.len() as u64;
         *self.reasons.entry(Reason::LeaseExpired).or_default() += agents;
-        if let Some(session) = sessions.entries.get(key) {
-            // A lapse is no return, so main's window ends here.
-            if let Some(main) = session.agents.get(MAIN_AGENT) {
-                warming_mut(&mut self.agents, key, MAIN_AGENT)
-                    .expect(AGENT_HELD)
-                    .close_idle_episode(main);
-            }
+        // A lapse is no return, so main's window ends here.
+        if let Some(main) = session.agents.get(MAIN_AGENT) {
+            warming_mut(&mut self.agents, key, MAIN_AGENT)
+                .expect(AGENT_HELD)
+                .close_idle_episode(main);
         }
     }
 }

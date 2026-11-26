@@ -1019,7 +1019,7 @@ impl Engine {
                     let agent = &session.agents[&agent_id];
                     let warming =
                         warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-                    let ceilings = ceilings_for(warming, policy, &view, &rows, &self.parts.timing);
+                    let ceilings = ceilings_for(warming, policy, &view, &rows);
                     ceiling(
                         agent,
                         session.attended_at(now),
@@ -1128,18 +1128,7 @@ impl Engine {
                     now,
                 );
                 let holder = match held {
-                    Err(Gate::Drop(reason, label)) => {
-                        let changes = inner.warming.discard(
-                            &inner.sessions,
-                            &key,
-                            &agent_id,
-                            reason,
-                            Some(label),
-                        );
-                        inner.apply_changes(changes);
-                        continue;
-                    }
-                    Err(Gate::Hold(reason)) => {
+                    Err(reason) => {
                         let changes =
                             inner
                                 .warming

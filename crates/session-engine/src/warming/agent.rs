@@ -213,18 +213,23 @@ impl AgentWarming {
             || !self.kept.is_empty()
     }
 
+    /// Whether the current recipe runs in fast mode, false while the agent holds none.
+    pub(crate) fn fast(&self) -> bool {
+        self.current.as_ref().is_some_and(|o| o.recipe.fast)
+    }
+
     /// The names `follow_resolutions` reads on an agent with no compaction open, as an arrival leaves it once
     /// `end_compaction` ran: the ones the arrival looks up in the catalog's acknowledged resolution.
-    pub(crate) fn held_models(&self) -> BTreeSet<String> {
-        let mut models = BTreeSet::from([self.canonical_model.clone()]);
+    pub(crate) fn held_models(&self) -> BTreeSet<&str> {
+        let mut models = BTreeSet::from([self.canonical_model.as_str()]);
         models.extend(
             self.current
                 .as_ref()
                 .and_then(|o| o.prior.as_ref())
-                .map(|prior| prior.model.clone()),
+                .map(|prior| prior.model.as_str()),
         );
-        models.extend(self.kept.iter().map(|kept| kept.canonical_model.clone()));
-        models.extend(self.unanswered.iter().map(|probe| probe.model.clone()));
+        models.extend(self.kept.iter().map(|kept| kept.canonical_model.as_str()));
+        models.extend(self.unanswered.iter().map(|probe| probe.model.as_str()));
         models
     }
 

@@ -133,11 +133,11 @@ impl WarmingState {
             .expect(AGENT_HELD)
             .held_models()
         {
-            if resolved.contains_key(&held) {
+            if resolved.contains_key(held) {
                 continue;
             }
-            if let Some(dated) = resolve(&held).filter(|dated| *dated != held) {
-                resolved.insert(held, dated);
+            if let Some(dated) = resolve(held).filter(|dated| dated != held) {
+                resolved.insert(held.to_owned(), dated);
             }
         }
         warming_mut(&mut self.agents, key, agent_id)
