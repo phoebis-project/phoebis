@@ -700,6 +700,18 @@ impl WarmingState {
         std::mem::take(&mut self.settlements_after_save)
     }
 
+    /// Holds each settlement queued for the ledger until a save carries the agents without the probes they settle.
+    pub(crate) fn hold_settlements_for_save(&mut self) {
+        let settled = std::mem::take(&mut self.settlements);
+        self.settlements_after_save.extend(settled);
+    }
+
+    /// Puts the settlements a failed save took back in front of the ones held since its snapshot.
+    pub(crate) fn return_unsaved_settlements(&mut self, settled: Vec<Settlement>) {
+        let queued = std::mem::replace(&mut self.settlements_after_save, settled);
+        self.settlements_after_save.extend(queued);
+    }
+
     /// The cutoff of the days the last roll dropped, which the next save purges.
     pub(crate) fn purge_cutoff(&self) -> Option<i64> {
         self.purge_counters_before

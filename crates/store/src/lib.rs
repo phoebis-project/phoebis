@@ -190,8 +190,9 @@ pub use schema::SCHEMA_VERSION;
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The connection's cache of prepared statements. The routing writer's batch alone runs about 20 cached statements,
-/// and the session memory, the keepalive save and the per-holder credential reads cache theirs beside them, about 30 in
-/// all, so rusqlite's default of 16 would evict and recompile some on every batch. 64 holds them all with room.
+/// and the session memory, the save of the engine's state and the per-holder credential reads cache theirs beside
+/// them, about 30 in all, so rusqlite's default of 16 would evict and recompile some on every batch. 64 holds them all
+/// with room.
 const STATEMENT_CACHE_CAPACITY: usize = 64;
 
 // A poisoned store mutex means a prior panic happened while a write was in flight; the store's

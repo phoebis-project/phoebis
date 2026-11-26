@@ -782,8 +782,7 @@ impl Engine {
             // The registry first, then the ledger: the settlements wait for the save that carries each ended recipe's
             // agent without the probes they settle, so a failed save sends nothing and a crash between the save and
             // the ledger's write leaves a wasted probe unwritten rather than written again by the next load.
-            let settled = std::mem::take(&mut inner.warming.settlements);
-            inner.warming.settlements_after_save.extend(settled);
+            inner.warming.hold_settlements_for_save();
         }
         self.flush_persisted().await;
     }
@@ -943,8 +942,7 @@ impl Engine {
             }
             Err(error) => {
                 let mut inner = self.lock();
-                let queued = std::mem::replace(&mut inner.warming.settlements_after_save, settled);
-                inner.warming.settlements_after_save.extend(queued);
+                inner.warming.return_unsaved_settlements(settled);
                 if !inner.persist_failing {
                     inner.persist_failing = true;
                     tracing::warn!(%error, "the keepalive's state could not be written to the registry, so the engine keeps it and retries at every flush");

@@ -16,6 +16,7 @@ use phoebis_session_engine::{
     CompanionState, Engine, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, Lifecycle, ParkKind,
     Reason, LEASE_MS,
 };
+use phoebis_store::engine_state::BodyWrite;
 use phoebis_store::{
     CompanionSessionRow, EngineBatch, FactsKind, IdleReturnsRow, KeepaliveAgentRow,
 };
@@ -2921,6 +2922,68 @@ async fn an_agent_beside_main_whose_session_engine_row_is_of_an_older_version_le
         ),
         (vec!["session"], vec!["main"], vec!["main"]),
         "both of the subagent's rows left the registry, and the session's row and main's two rows stand"
+    );
+    assert_eq!(
+        second
+            .sessions()
+            .into_iter()
+            .map(|view| (
+                view.session_id,
+                view.lifecycles.into_keys().collect::<Vec<_>>()
+            ))
+            .collect::<Vec<_>>(),
+        vec![("session".to_string(), vec!["main".to_string()])],
+        "the session restores with main alone"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_beside_main_with_its_warming_row_alone_leaves_the_registry_and_the_session_stays()
+{
+    let r = rig(on_disk()).await;
+    let main =
+        r.h.store
+            .load_engine_state()
+            .unwrap()
+            .warming_agents
+            .into_iter()
+            .find(|row| row.session_id == "session" && row.agent_id == "main")
+            .expect("the registration's save holds main's row");
+    // A warming row whose agent holds no row of the session engine, with a sealed prompt that leaves with it.
+    r.h.store
+        .save_engine_state(&EngineBatch {
+            warming_agents: vec![KeepaliveAgentRow {
+                agent_id: "worker".into(),
+                body_write: BodyWrite::Seal(b"{\"messages\":[]}".to_vec()),
+                body_size: 15,
+                ..main
+            }],
+            ..EngineBatch::default()
+        })
+        .unwrap();
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let state = r.h.store.load_engine_state().unwrap();
+    assert_eq!(
+        (
+            state
+                .sessions
+                .iter()
+                .map(|row| row.session_id.as_str())
+                .collect::<Vec<_>>(),
+            state
+                .agents
+                .iter()
+                .map(|row| row.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            state
+                .warming_agents
+                .iter()
+                .map(|row| row.agent_id.as_str())
+                .collect::<Vec<_>>()
+        ),
+        (vec!["session"], vec!["main"], vec!["main"]),
+        "the lone row left the registry, and the session's row and main's two rows stand"
     );
     assert_eq!(
         second

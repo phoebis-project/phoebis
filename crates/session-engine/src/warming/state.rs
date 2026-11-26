@@ -39,7 +39,7 @@ pub(crate) struct WarmingState {
     /// The settlements the load and the lapse sweep queued, held until a save has dropped their probes from the
     /// agents: a failed save then sends nothing to the ledger, and a restart before a landed save settles each probe
     /// once rather than twice.
-    pub settlements_after_save: Vec<Settlement>,
+    pub(in crate::warming) settlements_after_save: Vec<Settlement>,
     /// The probes a gate withheld this locked section, with the keys their skip rows file under, read while the
     /// recipe still held its speed.
     pub skipped: Vec<Skipped>,
