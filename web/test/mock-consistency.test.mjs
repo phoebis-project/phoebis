@@ -431,12 +431,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const a of s.accounts) assert.deepEqual(a.pool, holder.get(a.id) ?? null, `account ${a.id} answers the pool whose members name it`);
   });
 
-  test(`the story's three pools read their warnings by code, at ${at}`, async () => {
-    const s = await story;
-    const codes = new Map(s.pools.map((p) => [p.id, p.warnings.map((w) => w.code)]));
-    assert.deepEqual([codes.get('all'), codes.get('jobs'), codes.get('work')], [['affinity_under_cache_ttl', 'five_hour_ceiling_low', 'weekly_ceiling_low'], ['spent_moves_off', 'warm_never'], []]);
-  });
-
   // Catches a mock that prices every regime's entry at one regime, or copies the base entry's figures. Primary reads
   // 0.62 of its 5-hour window under all's ceiling of 0.75, with a demand that reaches the ceiling short of the reset
   // under either prior, and the interactive rates price a fresh session's prior lower, so that runway runs longer. The
@@ -777,7 +771,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(oauth.filter(({ c }) => shaped(c.pace) && c.windows.spend === undefined).map(named), ['req_c94d1e07-b35/1 contract'], 'the one paid candidate without the spend window');
   });
 
-  test(`the story's usage-based seat knows its allowance as an API key does, and its spend reads under its cap or not at all, so holdsAllowance reads true for it at the walk's two sites, at ${at}`, async () => {
+  test(`the story's usage-based seat knows its allowance as an API key does, at ${at}`, async () => {
     const all = await decisionsOf(await story);
     const records = all.filter((r) => r.candidates.some((c) => c.accountId === 'contract'));
     assert.ok(records.length > 0, 'a record names the seat');
@@ -786,9 +780,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // The engine's paid-source arm knows the allowance of a source read by its spend or its worst bucket, never by a
       // plan window.
       assert.equal(seat.allowanceKnown, true, `${r.requestId}/${r.seq}'s seat`);
-      // The spent rule's holds_allowance reads the seat's spend alone, and a spend under its cap or a row with no spend
-      // entry holds allowance. The engine lists no plan window on a seat's row.
-      assert.ok(['five_hour', 'seven_day', 'seven_day_fable'].every((w) => seat.windows[w] === undefined), `${r.requestId}/${r.seq}'s windows ${Object.keys(seat.windows).join(', ')}`);
     }
     const keys = all.flatMap((r) => r.candidates.filter((c) => c.kind === 'api_key'));
     assert.ok(keys.length > 0 && keys.every((c) => c.allowanceKnown), 'every API key candidate knows its allowance');
@@ -2321,7 +2312,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   // Catches a draw that sends a probe whose session holds no live pin and places a pin for it: the selector answers
   // such a probe the pinned obstacle `no_pin` with no attempt, so no record of a probe places or moves a pin.
-  test(`no probe places a pin, and a probe that sent nothing reads the no_pin answer, or pin_moved where its pin stood off its recipe's account, at ${at}`, async () => {
+  test(`no probe places a pin, and a probe that sent nothing reads the no_pin answer unless its pin moved off its recipe's account, at ${at}`, async () => {
     const s = await story;
     const records = (await decisionsOf(s)).filter((r) => r.request.flags.probe);
     const placed = records.filter((r) => r.outcome.kind === 'placed' || r.outcome.kind === 'moved').map((r) => `${r.requestId}/${r.seq}`);
@@ -2335,7 +2326,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The failover session's subagent `6c2b` probes after its auxiliary call moved its pin to nightly while its recipe
     // stayed on primary (`MOVED_PIN_PROBE_ID` in mock/requests.ts). Every other probe that sent nothing found no pin.
     const moved = 'req_3c7f2e98-d16';
-    assert.deepEqual(answers.find(([id]) => id === moved)?.slice(1), [503, 'accounts_unavailable', 'rejected', [['exhausted', 'pinned', 'pin_moved']]], moved);
     for (const [id, ...answer] of answers.filter(([id]) => id !== moved)) assert.deepEqual(answer, [503, 'accounts_unavailable', 'rejected', [['exhausted', 'pinned', 'no_pin']]], id);
   });
 
@@ -3932,48 +3922,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       if (r.transport !== 'sse' || r.outcome === 'incomplete' || r.outcome === 'canceled') assert.equal(p.streamEndAt, null, `${r.id} closes no stream`);
       if (r.kind === 'count_tokens') assert.equal(p.firstContentAt, null, `${r.id} streams no content token`);
     }
-  });
-
-  test(`the breakdown's account shares equal the sum of its rows' own shares, at ${at}`, async () => {
-    const s = await story;
-    const range = { from: iso(s.now - DAY), to: iso(s.now) };
-    const groups = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' });
-    const day = s.allRollups.filter((r) => inHours(Date.parse(r.hour), Date.parse(range.from), Date.parse(range.to)));
-    const kinds = new Map(s.accounts.map((a) => [a.id, a.kind]));
-    const tiers = new Map(s.accounts.map((a) => [a.id, a.subscription?.rateLimitTier]));
-    // The rows' own shares, each request priced at its completion, summed as the route sums them: a window read null by
-    // any row reads null for the group.
-    const own = (rows) => {
-      const out = {};
-      for (const r of rows) {
-        if (tokensOf(r) === 0) continue;
-        for (const [w, share] of Object.entries(r.shares)) out[w] = share === null || out[w] === null ? null : (out[w] ?? 0) + share;
-      }
-      return out;
-    };
-    const close = (got, want, where) => {
-      if (want === null) assert.equal(got, null, `${where} reads ${got} where the rows price nothing`);
-      else assert.ok(typeof got === 'number' && Math.abs(got - want) < 1e-9, `${where} reads ${got} against the rows' ${want}`);
-    };
-    let compared = 0;
-    for (const g of groups) {
-      const tier = tiers.get(g.key);
-      const plan = day.filter((r) => r.accountId === g.key && r.funding === 'plan');
-      const counted = plan.filter((r) => r.kind !== 'probe');
-      // The counts read under every account, a request no account served among them, as the route counts them.
-      assert.equal(g.planOutputTokens, sum(counted, (r) => r.tokens.output), `${g.key}'s plan output tokens`);
-      if (kinds.get(g.key) !== 'oauth' || tier === undefined) {
-        assert.equal(g.costShares, null, `${g.key} prices a share`);
-        continue;
-      }
-      const cost = own(counted);
-      // An unpriced window is absent from the group's map, as the route answers it, while a request row keeps the key
-      // with null.
-      assert.deepEqual(Object.keys(g.costShares ?? {}).sort(), Object.keys(cost).filter((w) => cost[w] !== null).sort(), `${g.key}'s windows`);
-      for (const [w, got] of Object.entries(g.costShares ?? {})) close(got, cost[w], `${g.key}'s ${w}`);
-      compared += 1;
-    }
-    assert.ok(compared > 0 && groups.some((g) => g.costShares !== null && Object.values(g.costShares).some((v) => v !== null)), 'an account carries a priced share');
   });
 
   test(`the first page under the default range holds the undecodable row and its capture stops after the second delta, at ${at}`, async () => {

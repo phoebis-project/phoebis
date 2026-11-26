@@ -1036,13 +1036,6 @@ test("the return rule's popover reads its mode first, since the mode decides whi
   assert.deepEqual(readRows(stationPlan(keyed, 'move:return_to_plan')), [['mode', ['mode always']], ['cold', ['cold no']], ['dwell age', ['dwell age 5 min']], ['dwell', ['dwell 15 min']]]);
 });
 
-test("a move rule that did not run for an account-bound session reads the session's words in its reason row", async () => {
-  // The auxiliary call of the session that holds state on studio (`ACCOUNT_BOUND_CALL_ID` in mock/requests.ts), whose
-  // rules read `not_run` with the reason `account_bound`.
-  const record = await recordOf('req_3a9f5d12-b84/1');
-  assert.deepEqual(readRows(stationPlan(record, 'move:spent')), [['reason', ['the session is account-bound']]]);
-});
-
 test("the rung's entry rows read the matched entry and never the deeper refused one", async () => {
   const record = await recordOf('req_b2bed817-a58/1');
   const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);

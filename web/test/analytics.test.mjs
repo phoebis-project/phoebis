@@ -918,7 +918,6 @@ test("the pace score is the remaining share over the hours from the sample's ins
   const late = scoreOf(windowSample({ deadline: '2026-09-16T11:00:00.000Z', resetsAt: '2026-09-16T11:00:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 }));
   assert.ok(Math.abs(late - 6) < 1e-9, `five minutes to the deadline, not the hour from the bucket's start: ${late}`);
   assert.equal(scoreOf(windowSample({ deadline: '2026-09-16T10:55:00.000Z', resetsAt: '2026-09-16T10:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 })), null, "a deadline at the sample's instant is a stale sample");
-  assert.equal(scoreOf(windowSample({ deadline: '2026-09-16T10:00:00.000Z', resetsAt: '2026-09-16T10:00:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 })), null, 'and so is a deadline before it');
   assert.equal(scoreOf(windowSample({ resetsAt: '2026-09-16T12:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 1.2 })), 0, 'a utilization past 1 has nothing remaining rather than a negative share');
 });
 

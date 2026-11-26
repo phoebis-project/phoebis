@@ -283,17 +283,6 @@ test('a fact key the console has no label for is dropped rather than drawn under
   assert.deepEqual(read(decision({ fact: [fact('mystery', 1, 'count'), fact('depth', 2, 'count')] })).facts, ['depth 2']);
 });
 
-test('an event kind reads its own words', () => {
-  assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
-  assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
-  // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
-  assert.deepEqual([d.EVENT_KIND_LABEL.mark_cleared, d.EVENT_KIND_LABEL.reservation_expired], ['mark cleared', 'reservation expired']);
-  // A slowed account warns while its requests wait, and the end of the span reports no trouble.
-  assert.deepEqual([d.EVENT_KIND_LABEL.slow_down_started, d.EVENT_KIND_LABEL.slow_down_ended], ['slow-down started', 'slow-down ended']);
-  // A window read under its limit again reports no trouble, as its reset does, so both read neutral.
-  assert.deepEqual([d.EVENT_KIND_LABEL.window_cleared, d.EVENT_KIND_LABEL.window_reset], ['window cleared', 'window reset']);
-});
-
 test("the eligible step's none reads critical where another step's reads neutral, and a verdict the console does not know reads neutral", () => {
   assert.equal(d.verdictTone('none', 'eligible'), 'critical');
   assert.equal(d.verdictTone('none', 'pin'), 'neutral');

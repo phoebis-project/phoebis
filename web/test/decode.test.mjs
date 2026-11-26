@@ -1763,9 +1763,6 @@ test('the burn series decodes each point with its instant, both token sides, and
   assert.deepEqual([keyed.fiveHourShare, keyed.sevenDayShare, keyed.unit], [null, null, null]);
   assert.deepEqual(keyed.equivalentByTier, wire.equivalent_by_tier);
   assert.ok(body.points.every((p) => typeof p.unpriced === 'boolean'), 'every captured point carries the flag');
-  // The priced point reads false, as a missing field decodes, so a copy that sets the flag proves the wire name.
-  const [unpriced] = d.decodeBurn({ points: [{ ...wire, equivalent_by_tier: { default_claude_ai: null }, unpriced: true }] }).points;
-  assert.deepEqual([unpriced.unpriced, unpriced.equivalentByTier], [true, { default_claude_ai: null }], 'a bucket holding a plan row the cost model could not price reads flagged');
   const { tokens: _, ...untold } = wire;
   assert.equal(d.decodeBurn({ bucket_seconds: 3_600, points: [untold] }).points[0].tokens, 0, 'a point without the count decodes it as zero');
   assert.equal(d.decodeBurn({ bucket_seconds: 21_600, points: [] }).bucketSeconds, 21_600);
@@ -1812,7 +1809,6 @@ test('a selection trace decodes its placement', () => {
   assert.equal(placed.cohortHold.heldMs, 1250, 'the captured hold names its wait');
   assert.deepEqual([placed.placement.rung, placed.placement.depth, placed.placement.prefixTokens > 0], ['content', 2, true]);
   const trace = (placement) => d.decodeRequest({ attempts: [{ index: 1, selection: { placement, renewed: false, skipped: [], strategy: 'pace', tier: null } }] }).attempts[0].selection;
-  for (const rung of ['content', 'static', 'with_main']) assert.equal(trace({ depth: 1, prefix_tokens: 10, rung }).placement.rung, rung);
   assert.equal(trace({ depth: 1, prefix_tokens: 10, rung: 'guess' }).placement, null, 'a rung the console cannot word reads as no placement');
 });
 

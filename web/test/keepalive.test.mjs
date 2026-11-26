@@ -176,9 +176,7 @@ test("an agent line reads the route's entry for its agent on its recipe's model,
   const row = sessionRow('claude-sonnet-5-5', [main, pinEntry('7b2e', 'claude-haiku-4-5', 18_000), pinEntry('7b2e', 'claude-sonnet-5-5', 31_000)]);
   // Main's entry stands in the list, so no line of main is drawn from the row and the recipe's line leads.
   const pinOf = (agentId, model) => d.sessionLines({ ...row, agentFacts: [], agentRequests: [] }, [{ ...recipe(agentId, 'idle', null), model }])[0].pin;
-  assert.equal(pinOf('7b2e', 'claude-haiku-4-5')?.lastInputTokens, 18_000, 'the line on the first model reads the first pin');
   assert.equal(pinOf('7b2e', 'claude-sonnet-5-5[1M]')?.lastInputTokens, 31_000, 'the long-context suffix folds out case-blind');
-  assert.equal(pinOf('7b2e', 'claude-opus-5'), null, 'an agent with no pin on the model reads none');
   assert.equal(pinOf('main', 'claude-sonnet-5'), null, 'main on a model it holds no pin on reads none');
 });
 

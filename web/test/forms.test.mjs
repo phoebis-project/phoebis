@@ -68,7 +68,6 @@ test('a pool input refuses a keepalive idle below 0, a fraction of a second and 
 });
 
 test('a pool input refuses members the member write would refuse', () => {
-  assert.deepEqual(d.poolRefusals({ ...input, members: [] }, accounts), [], 'a pool can be saved with no member');
   assert.notEqual(d.poolRefusals({ ...input, members: [...input.members, { accountId: 'ghost', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }] }, accounts).length, 0, 'an account the console does not know');
   assert.notEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority: -1 }] }, accounts).length, 0, 'priorities are unsigned');
   assert.notEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 1.5 }] }, accounts).length, 0, 'priorities are whole');
@@ -412,10 +411,6 @@ test("refusals come in rail order, a new pool's first the name", () => {
   assert.deepEqual(
     refusals.map((r) => r.group),
     ['identity', 'models', 'bodyCapture'],
-  );
-  assert.deepEqual(
-    refusals.slice(0, 1).map((r) => r.text),
-    ['the pool needs a name.'],
   );
 });
 

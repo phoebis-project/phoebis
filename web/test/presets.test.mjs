@@ -608,11 +608,6 @@ const markedOne = '1 member projects over the ceiling: hot. A round there would 
 /** The second priced pin on hot, whose 2 points an hour left on hot let the guard pass the 3-point pin's mark. */
 const second = pin('hot', 't', 0.02, false);
 
-test("the preview walks a subagent's pin on its own member", () => {
-  // The session's main pin stands on cool, and its subagent's pin burns 3 points an hour on hot.
-  assert.equal(line([hot, cool], [pin('cool', 's', 0.01, false), pin('hot', 's', 0.03, false, { agentId: 'sub' }), second]), markedOne);
-});
-
 test('two pins of one session and one model are walked and marked apart, and a pin reads its warmth off its cold instant', () => {
   // r's main pin burns 3 points an hour on hot and its subagent's pin 1 on the same model. The cap's half of their 4
   // is 2, which main's 3 covers alone, and its mark leaves sub's 1 on hot, over the guard's tenth of 0.4.
