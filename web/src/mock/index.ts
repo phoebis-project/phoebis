@@ -37,7 +37,7 @@ import { createRng } from './rng';
 import { round } from './round';
 import { ROUTING_LOG_KINDS, WINDOW_DROP_MARGIN, claimDetail, cursorInteger, dropDetail, getDecision, inList, listRoutingLog, routingCursorOf, subscriptionPair, wholePoints } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
-import { ACCOUNT_ROLLUP_SAMPLE, INHERITED_FEATURE_ACCOUNTS, KEY_SAMPLE, NO_FEATURE_ACCOUNTS, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
+import { ACCOUNT_ROLLUP_SAMPLE, INHERITED_FEATURE_ACCOUNTS, KEEPALIVE_OVERVIEW_SAMPLE, KEY_SAMPLE, NO_FEATURE_ACCOUNTS, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
 
 // Fixed, so a pass over the mock reads the same secrets every run.
@@ -393,9 +393,8 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   busGaps: 0,
   expiredBetweenTurns24h: 0,
   lastBusGapAt: null,
-  // The caps are the bootstrap file's defaults. The story's overview carries the agent records' and the retained
-  // bytes', and it sets a sessions cap of its own, so the default of `max_sessions` is written here.
-  limits: { agents: { ...KEEPALIVE_OVERVIEW.limits.agents, count: 0 }, retainedBytes: { ...KEEPALIVE_OVERVIEW.limits.retainedBytes, count: 0 }, sessions: { count: 0, max: 128 } },
+  // The captured overview carries the bootstrap file's defaults.
+  limits: { agents: { ...KEEPALIVE_OVERVIEW_SAMPLE.limits.agents, count: 0 }, retainedBytes: { ...KEEPALIVE_OVERVIEW_SAMPLE.limits.retainedBytes, count: 0 }, sessions: { ...KEEPALIVE_OVERVIEW_SAMPLE.limits.sessions, count: 0 } },
   pools: [],
   probes24h: { failed: 0, held: 0, ok: 0, skipped: 0 },
 };

@@ -3,7 +3,7 @@ import { anchorTier, fundingOf, tierCapacity, weightOf, type CostWindow } from '
 import { groupInto } from '@/lib/counts';
 import { expiredBetweenTurns, servingAttempt } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
-import { pinTtlMs } from '@/lib/keepalive';
+import { pinTtlMs, recipeFiler } from '@/lib/keepalive';
 import { compareRequests } from '@/lib/requests';
 import { regimeFitOf } from '@/lib/selection';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
@@ -98,7 +98,7 @@ const sessionSpec: ({
    * `compactedAgent` names one, and its earlier agents' by their id, since an agent with seed rows and no line has no
    * place there. Absent on a row with no reported fact.
    */
-  facts?: { agents?: (Omit<SessionAgentFacts, 'agentId'> | null)[]; earlier?: Readonly<Record<string, Omit<SessionAgentFacts, 'agentId'>>>; session: Partial<SessionFacts> };
+  facts?: { agents?: (Omit<SessionAgentFacts, 'agentId'> | null)[]; earlier?: readonly SessionAgentFacts[]; session: Partial<SessionFacts> };
   /**
    * The row is finished: the builder writes main's cause `session_ended`, every subagent's `agent_released` and every
    * agent in `released` state.
@@ -168,7 +168,7 @@ const sessionSpec: ({
   // holds a seed row and no line, by a name and a type of its own.
   {
     keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' }, cause: 'overage', subagentHold: 'parked_limit',
-    facts: { earlier: { '0b7f': { agentType: 'repo-scout', description: null, name: 'scout' } }, session: { cwd: '/home/dev/work/billing-service/api', project: '/home/dev/work/billing-service', repository: 'git.example/acme/billing-service', repositoryRoot: '/home/dev/work/billing-service' } },
+    facts: { earlier: [{ agentId: '0b7f', agentType: 'repo-scout', description: null, name: 'scout' }], session: { cwd: '/home/dev/work/billing-service/api', project: '/home/dev/work/billing-service', repository: 'git.example/acme/billing-service', repositoryRoot: '/home/dev/work/billing-service' } },
   },
   // Its companion mod holds the cache warming off for the session, so the engine keeps no prompt of it and sends no
   // probe. Main's line reads ended, and the pin that a move of the story wrote stays.
@@ -1050,8 +1050,7 @@ SESSIONS.forEach((pin, i) => {
       const facts = reported.agents?.[j];
       return facts ? [{ agentId: r.agentId, ...facts }] : [];
     });
-    const earlier = Object.entries(reported.earlier ?? {}).map(([agentId, facts]) => ({ agentId, ...facts }));
-    pin.agentFacts = [...lined, ...earlier].sort((a, b) => byteOrder(a.agentId, b.agentId));
+    pin.agentFacts = [...lined, ...(reported.earlier ?? [])].sort((a, b) => byteOrder(a.agentId, b.agentId));
   }
   pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
   // The row's ended mark is its display pin's line's. A row the mod released whole lists no line, and the router holds
@@ -1728,8 +1727,9 @@ const ENGINE_SESSIONS = SESSIONS.filter((s, i) => s.companion !== 'none' || (i <
 // (`Session::holds_slot` in the session engine). A session that registered and sent nothing holds none, an ended one
 // holds none while its entry stays, and the mod's release of each agent is no end. In the story a session sent a
 // request where the engine keeps a recipe of it, and it ended where its main's recipe reads the session's end.
+const recipesOf = recipeFiler(RECIPES);
 const SLOT_HOLDERS = ENGINE_SESSIONS.filter((s) => {
-  const own = RECIPES.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId);
+  const own = recipesOf(s);
   return own.length > 0 && !own.some((r) => r.agentId === 'main' && r.cause === 'session_ended');
 });
 
@@ -1757,8 +1757,8 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   // retained bytes are hand-set like the probe counts, at 92 percent of their cap. Every agent record the story's
   // engine holds carries a recipe, the released ones among them, so the records count the recipes.
   limits: {
-    agents: { count: RECIPES.length, max: 1_024 },
-    retainedBytes: { count: Math.round(0.92 * 256 * 1_048_576), max: 256 * 1_048_576 },
+    agents: { count: RECIPES.length, max: KEEPALIVE_OVERVIEW_SAMPLE.limits.agents.max },
+    retainedBytes: { count: Math.round(0.92 * KEEPALIVE_OVERVIEW_SAMPLE.limits.retainedBytes.max), max: KEEPALIVE_OVERVIEW_SAMPLE.limits.retainedBytes.max },
     sessions: { count: SLOT_HOLDERS.length, max: 18 },
   },
   // `all` is the one pool that keeps caches warm, so its probes are the router-wide count. Its buckets keep the bounds
