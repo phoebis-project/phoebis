@@ -1964,8 +1964,8 @@ const hourlyShare = (perHour: number) => `${(perHour * 100).toFixed(1)} %/h`;
 // The router records the wall as a line of 1, the window's whole share.
 const lineWords = (limit: number): string => (limit >= 1 ? 'the wall' : `the ceiling ${fmtPct(limit)}`);
 /**
- * A move's destination fit: the gate's word, or `spent` from the landing's row where a failover lands on a member
- * with no allowance left.
+ * A move's destination fit: the gate's word, or `spent` from the landing's row where a failover or a replaced pin lands
+ * on a member with no allowance left.
  */
 const FIT_WORD: Record<string, string> = { fits: 'fits', least_bad: 'least bad', rewrite_only: 'rewrite only', spent: LAST_RESORT_LABEL.spent };
 /**

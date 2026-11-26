@@ -40,7 +40,8 @@ export const servingAttempt = (r: Pick<RequestLog, 'attempts'>): Attempt | null 
 const TPS_MIN_SPAN_MS = 500;
 
 /** A row's four latency samples as the rollup keeps them: each timing less the row's slow-down waits, never under
- *  zero, and a tok/s sample only over a span of TPS_MIN_SPAN_MS or more. A cap, reset or rewrite wait stays in. */
+ *  zero, and a tok/s sample only over a span of TPS_MIN_SPAN_MS or more and an output above zero. A cap, reset or
+ *  rewrite wait stays in. */
 export function latencySamples(r: Pick<RequestLog, 'durationMs' | 'held' | 'ttfbMs' | 'ttftMs' | 'usage'>): { durationMs: number | null; outputTps: number | null; ttfbMs: number | null; ttftMs: number | null } {
   const hold = (r.held?.waits ?? []).reduce((sum, w) => (w.reason === 'slow_down' ? sum + w.heldMs : sum), 0);
   const lessHold = (ms: number | null) => (ms === null ? null : Math.max(0, ms - hold));

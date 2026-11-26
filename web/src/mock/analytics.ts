@@ -1030,8 +1030,8 @@ export function termEndOf(a: Account, at: number): number | null {
   return earliest(endOf(a, at), flagged);
 }
 
-/** How long before a drop a used claim of its account still joins it: the router dates the drop at the first poll
- *  after the use. */
+/** How long before a drop a used claim of its account still joins it: the ledger dates the drop at the poll that
+ *  writes its event, the first or the second behind the use. */
 const CLAIM_JOIN_MS = HOUR;
 
 /**

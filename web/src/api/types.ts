@@ -2138,14 +2138,15 @@ export interface BurnFigures {
 
 /** A pin's move figures: a row's for its display pin, a line's for its own. */
 export interface MoveFigures {
-  /** The cost a move of the pin pays as a warm pin, as a shedding round's pick compares it, null where the cost model
-   *  sizes none. */
+  /** The cost a move of the pin pays as a warm pin, as a shedding round's pick compares it. Null where the cost model
+   *  sizes none, and for a pin that no round can move: one that holds state on its account and one with no
+   *  destination. */
   moveCost: number | null;
   /** The share of the dropped thinking as output on the window moveCost reads, which a cold pin's move pays. Null
    *  where moveDropSize is. */
   moveDropCost: number | null;
   /** The dropped thinking at the output's weight, in tokens, which orders a cold pin whose move drops thinking. Null
-   *  where the move drops nothing and where the cost model weighs none. */
+   *  where the move drops nothing, a pin with no destination among them, and where the cost model weighs none. */
   moveDropSize: number | null;
   /** The size the round's order divides the pin's burn by, in tokens. Null on a pin with no prompt size. */
   moveSize: number | null;
@@ -2209,7 +2210,8 @@ export interface SessionSpend extends SessionSpendPart {
   probes: SessionSpendPart;
 }
 
-/** A session's client requests of the last 24 hours by class, and their spend. */
+/** A session's client requests of the 24 whole hours before the current hour and the current hour so far, by class,
+ *  and their spend. */
 export interface SessionDay extends Pick<SessionSpendPart, 'billedUsd' | 'equivalent'> {
   /** By request class as the ledger holds it, `other` for a request with none. */
   requests: Record<string, number>;
@@ -2252,8 +2254,10 @@ export interface SessionAgentFacts {
 }
 
 /**
- * On a row with no pin, `burnAt`, `moveCost` and `moveSize` read null, and a reader takes a null `moveCost` as 0. The
- * row's `moveSize` is the rewrite at the pin's destination plus the dropped thinking at the output's weight.
+ * On a row with no pin, `burnAt`, `moveCost` and `moveSize` read null, and a reader takes a null `moveCost` as 0.
+ * `moveCost` reads null too on a pin that holds state on its account and on a pin with no destination, since no round
+ * moves either. The row's `moveSize` is the rewrite at the pin's destination plus the dropped thinking at the output's
+ * weight.
  */
 export interface Session extends BurnFigures, MoveFigures {
   /** Whether the pin holds state on its account, such as a file, a container or a skill, so that the router keeps it
@@ -2278,7 +2282,8 @@ export interface Session extends BurnFigures, MoveFigures {
   /** The pin's cycle, null until two requests of the pin after its placement have measured a gap under the pool's
    *  burn average, and on a row with no pin. */
   cycleMs: number | null;
-  /** The session's client requests of the last 24 hours by class, and their spend. */
+  /** The session's client requests of the 24 whole hours before the current hour and the current hour so far, by
+   *  class, and their spend. */
   day: SessionDay;
   /** The effective effort of the pin's last turn, the word as the client sent it, and `null` with none or no pin. */
   effort: string | null;
@@ -2377,7 +2382,10 @@ export type GuardVerdict = (typeof GUARD_VERDICT_VALUES)[number];
 
 /** One row per agent that has sent a real request: its recipe's state and cause, its lifecycle and its probes. */
 export interface KeepaliveRecipe {
-  /** The account the agent is pinned to. */
+  /**
+   * The recipe's holder, the account its probes run on: the account the agent is pinned to, except behind `pin_moved`,
+   * where it keeps the account the pin left until the agent's next request arms the recipe.
+   */
   accountId: string | null;
   agentId: string;
   agentState: Lifecycle;

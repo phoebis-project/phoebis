@@ -195,8 +195,8 @@ function stampAt(pool: PoolSeed, at: number): string {
 
 /**
  * The decisions an earlier build of the router recorded, keyed `${requestId}/${seq}`. One build wrote a decision's
- * record and its round, so both lack each member that build did not write: the round names no unit, no floor, no
- * dropped thinking and no reservation, and the settings no Fable reservation option.
+ * record and its round, so both lack each member that build did not write: the record's settings hold no Fable
+ * reservation option, and `roundEvent` names what the round lacks.
  */
 const EARLIER_BUILD: ReadonlySet<string> = new Set(['req_1eaa9bc1-a18/1', 'req_3e7a5c19-f84/1']);
 
@@ -1131,8 +1131,8 @@ function reservationShort(source: RecordCandidate, pool: PoolSeed, at: number): 
 /**
  * Whether each pin the routing state keeps on the account under the pool's keys at `at` draws a week of its own, the
  * Fable use a round on the reservation leaves in place. The router also leaves a pin out of that round for its lane,
- * its agent's end and its session's account state, and drops a pin that a release took. This state keeps none of
- * those, the end and the release included.
+ * its agent's end and its session's account state, and drops a pin that a release took. Of those, this state can read
+ * the account state alone, through `accountBoundAt`, and keeps neither the lane, the end nor the release.
  */
 function fablePinsAlone(accountId: string, pool: PoolSeed, at: number): boolean {
   return heldModelsOf(accountId, pool, at).every((m) => modelWeeks(TABLES, m).length > 0);
@@ -2068,7 +2068,8 @@ const CLEARED_BY_WAIT = new Set(['cooldown', 'credits', 'overage', 'spent']);
 /**
  * The status the relay answers an exhaustion with, by the router's rule. The router reads an untimed exhaustion as the
  * cap, which frees on its own, only where it held the request at the cap with no leg dialed. The relay dials a leg for
- * each attempt, so a decision past attempt 1 has one behind it.
+ * each attempt, so a decision past attempt 1 has one behind it. A leg that fails over ahead of the attempt's count
+ * leaves attempt 1 with a leg dialed, and the story draws none.
  */
 function exhaustionStatus(spec: Spec, x: Omit<Exhaustion, 'status'>): number {
   if (x.kind === 'untimed') return heldOut(spec) && spec.attempt === 1 ? 429 : 503;
@@ -3002,7 +3003,7 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
  * and the share floor the round applied. Each pin names the thinking its move drops, null on a kept pair and with no
  * destination. A round the Fable reservation fired names the reservation, which any other round holds null. An event
  * of an earlier build (`EARLIER_BUILD`) stored the rewrite as the story's 20x equivalent of that window and names no
- * unit, no floor, no dropped thinking and no reservation.
+ * rewrite unit, no floor, no dropped thinking, no cold pin's order key (`per_drop`) and no reservation.
  */
 function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
   const earlier = EARLIER_BUILD.has(decision);
@@ -3081,7 +3082,7 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
   /** The round's pick as the router plans it. The walk takes the pins in the order's sequence. At each position
    *  it reads the pins from there on whose burn covers the rest, each with the earlier marks' destinations
    *  booked, and the pick's own booking joins behind those reads. With no covering pin to pick, it reads the pin
-   *  at the position with the same bookings where its seed marks it or finds it no runway. A pin that the walk
+   *  at the position with the same bookings where its seed marks it or names it `no_runway`. A pin that the walk
    *  never reads keeps the order's read. */
   const pickReplayOf = (pins: RoundPin[]) => {
     const replay = new Map<RoundPin, { destination: string | null; rewrite: number | null; runway: number | null; window: string | null }>();

@@ -560,7 +560,7 @@ export function AnalyticsPage() {
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, foldOptions, latest)), [stale, sessionId, series.data, kept, rangeBucketMs, fromIso, toIso, groupBy, foldOptions, latest]);
   const buckets = useMemo(() => bucketsOf(points), [points]);
   // The Dropped thinking blocks card's totals come from the breakdown, and whether its base covers the range from the
-  // buckets of this answer.
+  // series answer's buckets.
   const reportedCovered = useMemo(() => tab === 'cache' && reportedCovers(points), [points, tab]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.

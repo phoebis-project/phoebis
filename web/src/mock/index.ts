@@ -1474,7 +1474,8 @@ export class MockApi implements Api {
     return latency(this.registry().keys.map((k) => this.keyView(k)));
   }
 
-  /** The pins under the pool's keys at the read, the clock the sessions route reads, swept at the pool's affinity TTL. */
+  /** The pins under the pool's keys at the read, the clock the sessions route reads, swept at the pool's affinity
+   *  TTL. */
   listPoolPins(poolId: string) {
     const { keys, pools, sessions } = this.registry();
     const pool = pools.find((p) => p.id === poolId);

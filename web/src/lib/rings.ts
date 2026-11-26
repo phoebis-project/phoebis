@@ -19,7 +19,8 @@ export interface RingLeftOut { id: string; label: string; reason: string }
  * capacity over the chosen tier's, on the Fable ring its tier's 7-day capacity times the Fable week's capacity factor
  * over the chosen tier's Fable-week capacity. `rows` is empty when every account is left out, and `emptyReason` says
  * why the ring then weighs no account: `no_window` where no listed account carries the window, `unreported` where a
- * listed account with a sized tier holds no share of it, and `unsized` where the tiers are not sized.
+ * listed account with a sized tier holds no share of it, and `unsized` where the tiers are not sized. It is read where
+ * `rows` is empty alone and means nothing beside rows.
  */
 export interface RingFigures { capacity: number; emptyReason: 'no_window' | 'unreported' | 'unsized'; left: number; leftOut: RingLeftOut[]; rows: RingRow[]; week: WeekPosition; window: RingWindow }
 

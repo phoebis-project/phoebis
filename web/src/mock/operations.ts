@@ -493,8 +493,8 @@ type UndatedLine = Omit<AgentContext, 'pinnedAt'> & Partial<Pick<AgentContext, '
  * and the TTL its session's entries live for (`pinCacheTtlOf`), its burn and dollars as folded priced on the pin's own
  * account and model, in that account's unit and window, as the row's are for the display pin, and its lane, its flag of
  * held account state and its move's figures as the row's are. Its burn folded at its last use unless its caller names
- * the instant, as the display pin's line takes its row's, since the route keeps one fold per pin, and the line serves it
- * decayed to the story's clock with that instant beside it.
+ * the instant, as the display pin's line takes its row's, since the route keeps one fold per pin, and the line serves
+ * it decayed to the story's clock with that instant beside it.
  */
 const pinLine = (
   line: Omit<UndatedLine, 'accountBound' | keyof BurnFigures | 'cacheTtlMs' | 'fast' | keyof MoveFigures | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
@@ -989,10 +989,10 @@ const onAccount = (r: KeepaliveRecipe): r is KeepaliveRecipe & { accountId: stri
 const pinEndedOf = (i: number, r: Pick<KeepaliveRecipe, 'cause'>, j: number): boolean =>
   r.cause === 'agent_released' || (i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT);
 /**
- * The pin of the agent that recipe `r` at place `j` of drawn row `i` names, as the sessions route draws its line and the
- * pins route answers it, so the two routes read one `ended` and one set of move figures. Main's pin reads the row's own
- * figures. A subagent's pin takes the companion's five-minute TTL, its place's effort word and its last request as its
- * last use and its last refresh, and a moved pin's row is the one its move wrote.
+ * The pin of the agent that recipe `r` at place `j` of drawn row `i` names, as the sessions route draws its line and
+ * the pins route answers it, so the two routes read one `ended` and one set of move figures. Main's pin reads the row's
+ * own figures. A subagent's pin takes the companion's five-minute TTL, its place's effort word and its last request as
+ * its last use and its last refresh, and a moved pin's row is the one its move wrote.
  */
 const agentPinOf = (row: Session, i: number, r: KeepaliveRecipe & { accountId: string }, j: number): UndatedLine => {
   const fold = lastFold.get(row);
@@ -1174,11 +1174,12 @@ const ledgerRowOf = (rows: readonly RequestLog[], s: Pick<Session, 'keyGeneratio
 /**
  * A session's row once the operator deleted its key, read off `written`, the requests the ledger had written by the
  * delete: the store deletes the key's pins with the key, so the route lists the row off the ledger alone, its account
- * and model those of its newest request, and a session the ledger holds no request of leaves the list. A deleted key
- * writes no request behind its delete, so these are the requests the list reads at each later instant. The engine
- * holds the key's sessions until its next tick, up to a second behind the delete, and for that second the route also
- * lists each of them that the ledger holds no request of, as a historical row with no account. The mock ends them at
- * the delete, so for that second it leaves those rows out.
+ * and model those of its newest request, and a session the ledger holds no request of leaves the list. The story writes
+ * no request of a deleted key behind its delete, so these are the requests the list reads at each later instant, though
+ * the router's delete does not stop a request already in flight. The engine holds the key's sessions until its next
+ * tick, up to a second behind the delete, and for that second the route also lists each of them that the ledger holds
+ * no request of, as a historical row with no account. The mock ends them at the delete, so for that second it leaves
+ * those rows out.
  */
 export const rowsOfDeletedKey = (s: Session, written: readonly RequestLog[]): Session[] => {
   const row = ledgerRowOf(written, s, true);
@@ -1187,11 +1188,11 @@ export const rowsOfDeletedKey = (s: Session, written: readonly RequestLog[]): Se
 };
 
 /**
- * Studio's notebook sessions in work, pinned there while the slow-down holds it: the slowed one with its subagent, whose
- * main pin has the cycle its turns since the placement give, the two the round marked, the one whose turn opened the
- * span and the account-bound one placed after the round, whose pins have none yet. Each burn is the main pin's demand
- * at the account's half speed, and each `burnUsd` that pin's dollars an hour. No recipe warms them. They are written
- * after the recipes rather than rolled, so every drawn row and recipe keeps its rolls.
+ * Studio's notebook sessions in work, pinned there while the slow-down holds it: the slowed one with its subagent,
+ * whose main pin has the cycle its turns since the placement give, the two the round marked, the one whose turn opened
+ * the span and the account-bound one placed after the round, whose pins have none yet. Each burn is the main pin's
+ * demand at the account's half speed, and each `burnUsd` that pin's dollars an hour. No recipe warms them. They are
+ * written after the recipes rather than rolled, so every drawn row and recipe keeps its rolls.
  */
 const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number; burnUsd: number; cycleMs: number | null; sessionId: string }[] = [
   { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }, { agentId: '7b2e', model: HAIKU }], burn: 0.0125, burnUsd: 0.31, cycleMs: 42_000, sessionId: SLOWED_SESSION_ID },
@@ -1618,10 +1619,10 @@ const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => {
 /**
  * The pins under a pool's keys as `GET /admin/pools/{id}/pins` answers them at `now`, in the order of their keys,
  * sessions, agents and models as bytes: each line of the rows and each pin the rows list no line for, with none of the
- * sessions route's filters. A pin's mark is its row's where it is the row's display pin, since the story marks no other.
- * The router's sweep takes a pin past the pool's affinity TTL, so a pin that `pinReadAt` reads as swept at `now` is out:
- * its last use is the later of its recipe's last request and last probe, which each renew it, and a line's own last use
- * where no recipe names the pin.
+ * sessions route's filters. A pin's mark is its row's where it is the row's display pin, since the story marks no
+ * other. The router's sweep takes a pin past the pool's affinity TTL, so a pin that `pinReadAt` reads as swept at `now`
+ * is out: its last use is the later of its recipe's last request and last probe, which each renew it, and a line's own
+ * last use where no recipe names the pin.
  */
 export const poolPinsAt = (now: number, sessions: readonly Session[], keyIds: ReadonlySet<string>, ttlMs: number): PoolPin[] => {
   const recipes = new Map(RECIPES.map((r) => [pinKeyFor(r.keyId, r.sessionId, r.agentId, r.model), r]));
