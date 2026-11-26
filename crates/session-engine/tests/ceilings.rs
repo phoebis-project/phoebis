@@ -814,6 +814,37 @@ async fn a_passed_wake_ends_the_park_like_a_deadline_in_both_orderings() {
     }
 }
 
+/// A report can write a park while the tick waits for the router's view between its two locked sections. A subagent's
+/// wake that had passed by the tick's instant leaves no rule that says probe once its park ends, so the recipe ends
+/// with `parked_limit` at that tick.
+#[tokio::test]
+async fn a_park_reported_while_the_tick_waits_for_the_routers_view_ends_before_its_ceiling_is_read()
+{
+    let mut r = rig(plan(policy(|_| {}))).await;
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
+        .unwrap();
+    r.observe("worker").await;
+    let now = r.now();
+    let engine = r.engine.clone();
+    let mut tick = std::pin::pin!(engine.step());
+    // The runtime runs one thread, so the router task cannot answer the tick's first ask inside this poll, and the tick
+    // stands between its two sections.
+    let first = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(std::future::Future::poll(tick.as_mut(), cx))
+    })
+    .await;
+    assert!(first.is_pending(), "the tick waits for the router's view");
+    park(&mut r, "worker", "scheduled", None, Some(now - MINUTE)).await;
+    tick.await;
+    no_probe_running(&r.engine).await;
+    assert_eq!(
+        (r.view("worker").cause, retained(&r, "worker")),
+        (Reason::ParkedLimit, false),
+        "the wake had passed at the tick's instant"
+    );
+}
+
 #[tokio::test]
 async fn both_kinds_are_active_while_any_rule_says_probe() {
     // The parked ceiling ends the command's part at 90 minutes while the wake at 100 is inside the horizon.

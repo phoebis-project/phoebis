@@ -871,8 +871,7 @@ impl Engine {
             inner.warm(|w, s| w.settle_lapsed_pending(s, now));
             // Ahead of the test for a retained recipe, since a park ends whether or not its agent holds one, and no
             // agent of a session with its warming off does. Ahead of the refresh's hold too, so a deadline or a wake
-            // that passes while the pool is disabled is recorded when it passes. The ceilings below read the park
-            // this left, under the same `now`.
+            // that passes while the pool is disabled is recorded when it passes.
             inner.end_passed_parks(now);
             inner
                 .warming
@@ -893,6 +892,9 @@ impl Engine {
             if inner.closed {
                 return;
             }
+            // A report can write a park while the tick waits for the router's view, so a part that passed by `now`
+            // ends again here, under the hold in which the ceilings below read the park.
+            inner.end_passed_parks(now);
             let mut lapsed: Vec<Skipped> = Vec::new();
             inner.warm(|w, s| w.follow_resolutions(s, &view.canonical));
             let mut due: Vec<(i64, SessionKey, String, Holder)> = Vec::new();
