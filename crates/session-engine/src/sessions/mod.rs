@@ -5,3 +5,4 @@ pub(crate) mod events;
 pub(crate) mod facts;
 pub(crate) mod persist;
 pub(crate) mod state;
+pub(crate) mod view;

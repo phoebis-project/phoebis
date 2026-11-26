@@ -10,15 +10,13 @@ mod warming;
 
 pub use companion::companion_router;
 pub use engine::config::{KeepaliveLimits, LimitsError, PERSIST_INTERVAL};
-pub use engine::view::{
-    recipe_state, AgentCounts, CompanionState, KeepaliveSummary, Lifecycle, RecipeState,
-    RecipeView, SessionView, SummaryState,
-};
+pub use engine::view::{Lifecycle, RecipeView, SessionView};
 pub use engine::{spawn_observer, Engine, EngineParts, EngineStats};
 pub use routes::{events_router, EVENTS_PATH, MAX_BODY_BYTES};
 pub use sessions::config::{LEASE_MS, LEASE_SECONDS};
 pub use sessions::facts::{AgentFacts, SessionFacts, StoredSessionFacts};
 pub use sessions::state::{AgentState, Park, ParkKind, SessionKey, MAIN_AGENT};
+pub use sessions::view::{CompanionState, SessionCounts};
 pub use warming::breakeven::{
     break_even_ms, factors_for, pool_fundings, resolve, BreakEvenFactors, CeilingInputs, Ceilings,
     Funding, Range, ResolvedCeilings,
@@ -39,3 +37,6 @@ pub use warming::recipe::{
 };
 pub use warming::savings::SavingsUnit;
 pub use warming::usage::{ProbeUsage, MAX_USAGE_BYTES};
+pub use warming::view::{
+    recipe_state, AgentCounts, KeepaliveSummary, RecipeState, SummaryState, WarmingCounts,
+};

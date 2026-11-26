@@ -1188,8 +1188,8 @@ mod tests {
             "the quota 429 retries rather than pausing"
         );
         assert_eq!(
-            crate::engine::view::recipe_state(warming.reason, warming.paused),
-            crate::engine::view::RecipeState::Held
+            crate::warming::view::recipe_state(warming.reason, warming.paused),
+            crate::warming::view::RecipeState::Held
         );
     }
 

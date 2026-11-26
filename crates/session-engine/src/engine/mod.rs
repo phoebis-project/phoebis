@@ -31,6 +31,7 @@ use crate::engine::persist::Dirty;
 use crate::sessions::state::{
     agent_ref, Arrived, ParkPassed, SessionKey, SessionsState, Slot, AGENT_HELD, MAIN_AGENT,
 };
+use crate::sessions::view::SessionCounts;
 use crate::warming::agent::{warming_mut, warming_ref};
 use crate::warming::breakeven::{CeilingInputs, FactorRows};
 use crate::warming::causes::{Reason, Wasted};
@@ -49,6 +50,7 @@ use crate::warming::requests::reported_prompt;
 use crate::warming::savings::{AttemptFunding, SavingsUnit};
 use crate::warming::state::{Change, Changes, WarmingState};
 use crate::warming::usage::ProbeUsage;
+use crate::warming::view::WarmingCounts;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
 
@@ -78,22 +80,12 @@ pub struct EngineParts {
     pub timing: KeepaliveTiming,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EngineStats {
-    pub agents: usize,
-    pub bus_gaps: u64,
-    /// The last bus gap's instant, `None` before the first.
-    pub last_bus_gap_at: Option<i64>,
     /// The request events (a selection, a head, a chunk, a completion, a new request) and the reports refused because
     /// they arrived after the shutdown's quiesce, so the state the last save holds is the state at the quiesce.
     pub late_updates: u64,
-    /// The sessions `max_sessions` bounds: a registered session that has sent no real request holds no slot, and an
-    /// ended session keeps its entry until the expiry and holds none.
-    pub live_sessions: usize,
-    pub retained_bytes: usize,
-    pub running_probes: usize,
-    /// Every session entry the engine holds: a session that holds no slot counts here and not in `live_sessions`.
-    pub sessions: usize,
+    pub sessions: SessionCounts,
+    pub warming: WarmingCounts,
 }
 
 pub(crate) struct Inner {
@@ -245,14 +237,9 @@ impl Engine {
     pub fn stats(&self) -> EngineStats {
         let inner = self.lock();
         EngineStats {
-            agents: inner.sessions.agent_count(),
-            bus_gaps: inner.warming.bus_gaps,
-            last_bus_gap_at: inner.warming.last_bus_gap_at,
             late_updates: inner.late_updates,
-            live_sessions: inner.sessions.live_sessions(),
-            retained_bytes: inner.warming.retained,
-            running_probes: inner.warming.running,
-            sessions: inner.sessions.entries.len(),
+            sessions: inner.sessions.counts(),
+            warming: inner.warming.counts(),
         }
     }
 

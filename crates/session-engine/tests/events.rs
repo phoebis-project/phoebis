@@ -286,8 +286,8 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
         refusal("agent_limit", 429),
         "three agents across two sessions"
     );
-    assert_eq!(r.engine.stats().sessions, 2);
-    assert_eq!(r.engine.stats().agents, 3);
+    assert_eq!(r.engine.stats().sessions.entries, 2);
+    assert_eq!(r.engine.stats().sessions.agents, 3);
 }
 
 #[tokio::test]
@@ -304,7 +304,7 @@ async fn a_request_of_a_later_generation_arms_nothing_on_the_previous_holders_se
         "a key id created again finds the previous holder's session, and arms nothing on it"
     );
     assert_eq!(
-        (r.engine.stats().retained_bytes, r.lifecycle("main")),
+        (r.engine.stats().warming.retained_bytes, r.lifecycle("main")),
         (0, before),
         "and leaves the agent it names exactly as it was"
     );

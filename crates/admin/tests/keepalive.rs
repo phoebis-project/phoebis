@@ -1422,7 +1422,7 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     )
     .await;
     parts.keepalive.step().await;
-    let retained = parts.keepalive.stats().retained_bytes;
+    let retained = parts.keepalive.stats().warming.retained_bytes;
     assert!(retained > 0, "the request's recipe is retained");
     let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
     assert_eq!(
@@ -1577,7 +1577,11 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     s2("session_start", 1).await;
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r2".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some("s2".into()), agent_id: Some("main".into()), parent_agent_id: None, instance_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
     s2("session_end", 2).await;
-    assert_eq!(parts.keepalive.stats().sessions, 2, "the ended entry stays");
+    assert_eq!(
+        parts.keepalive.stats().sessions.entries,
+        2,
+        "the ended entry stays"
+    );
     let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
     assert_eq!(
         overview["limits"]["sessions"],
@@ -2949,7 +2953,7 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
         .store(due + 1_000, std::sync::atomic::Ordering::SeqCst);
     parts.keepalive.step().await;
     fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
-        (parts.keepalive.stats().running_probes == 0).then_some(())
+        (parts.keepalive.stats().warming.running_probes == 0).then_some(())
     })
     .await;
     assert!(main().unwrap().probes_today >= 1, "the probe ran");

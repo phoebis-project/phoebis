@@ -1573,13 +1573,17 @@ async fn a_session_is_held_a_millisecond_short_of_its_expiry_and_goes_at_it() {
     })
     .await;
     r.observe("main").await;
-    let retained = r.engine.stats().retained_bytes;
+    let retained = r.engine.stats().warming.retained_bytes;
     assert!(retained > 0);
     r.advance(3_600_000 - 1);
     r.engine.expire();
     let stats = r.engine.stats();
     assert_eq!(
-        (stats.sessions, stats.agents, stats.retained_bytes),
+        (
+            stats.sessions.entries,
+            stats.sessions.agents,
+            stats.warming.retained_bytes
+        ),
         (1, 1, retained),
         "a millisecond short of the expiry the session is held"
     );
@@ -1587,7 +1591,11 @@ async fn a_session_is_held_a_millisecond_short_of_its_expiry_and_goes_at_it() {
     r.engine.expire();
     let stats = r.engine.stats();
     assert_eq!(
-        (stats.sessions, stats.agents, stats.retained_bytes),
+        (
+            stats.sessions.entries,
+            stats.sessions.agents,
+            stats.warming.retained_bytes
+        ),
         (0, 0, 0)
     );
 }
@@ -1597,13 +1605,17 @@ async fn a_session_is_held_a_millisecond_short_of_its_expiry_and_goes_at_it() {
 async fn a_deleted_key_leaves_no_session_agent_or_retained_byte() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    assert!(r.engine.stats().retained_bytes > 0);
+    assert!(r.engine.stats().warming.retained_bytes > 0);
     r.h.store.delete_api_key("desktop", "test").unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     let stats = r.engine.stats();
     assert_eq!(
-        (stats.sessions, stats.agents, stats.retained_bytes),
+        (
+            stats.sessions.entries,
+            stats.sessions.agents,
+            stats.warming.retained_bytes
+        ),
         (0, 0, 0)
     );
 }

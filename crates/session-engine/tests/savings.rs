@@ -929,7 +929,7 @@ async fn a_rejected_request_pauses_and_leaves_no_recipe_armed() {
         (
             status.next_probe_at,
             status.cause,
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (None, Reason::RequestRejected, 0)
     );
@@ -964,7 +964,7 @@ async fn a_failure_whose_last_recipe_expired_while_it_was_open_leaves_nothing_ar
         (
             status.next_probe_at,
             status.cause,
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (None, Reason::RequestFailed, 0)
     );
@@ -1059,7 +1059,7 @@ async fn a_recipe_a_failed_request_left_armed_lapses_and_is_evicted_as_any_armed
         (
             status.cause,
             status.next_probe_at,
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (Reason::Expired, None, 0)
     );
@@ -1068,7 +1068,7 @@ async fn a_recipe_a_failed_request_left_armed_lapses_and_is_evicted_as_any_armed
     let one = {
         let mut sized = rig(RigSpec::default()).await;
         sized.observe("main").await;
-        sized.engine.stats().retained_bytes
+        sized.engine.stats().warming.retained_bytes
     };
     let mut r = rig(RigSpec {
         limits: phoebis_session_engine::KeepaliveLimits {
@@ -1131,7 +1131,7 @@ async fn an_aside_recipe_counts_against_the_memory_bound_and_yields_first_to_its
         let sized = rig(RigSpec::default()).await;
         open_turn(&sized, "sized", "main");
         sized.engine.observe(completed(&sized, "sized", 0));
-        sized.engine.stats().retained_bytes
+        sized.engine.stats().warming.retained_bytes
     };
     let limit = one * 7 / 2;
     let mut r = rig(RigSpec {
@@ -1146,7 +1146,7 @@ async fn an_aside_recipe_counts_against_the_memory_bound_and_yields_first_to_its
         .await
         .unwrap();
     let retained = |r: &Rig| {
-        let bytes = r.engine.stats().retained_bytes;
+        let bytes = r.engine.stats().warming.retained_bytes;
         assert!(
             bytes <= limit,
             "{bytes} retained against a bound of {limit}"
@@ -2251,7 +2251,10 @@ async fn ended_by_the_idle_limit() -> Rig {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.view("main").cause, r.engine.stats().retained_bytes),
+        (
+            r.view("main").cause,
+            r.engine.stats().warming.retained_bytes
+        ),
         (Reason::IdleLimit, 0),
         "the window ended the recipe"
     );
@@ -2356,7 +2359,11 @@ async fn a_session_holding_a_pending_probe_alone_settles_it_at_the_lapse_without
     let r = ended_by_the_idle_limit().await;
     // The probe is pending: the tick at its entry's end settles it, and the save after the tick sends that one
     // settlement, which the rows below read.
-    assert_eq!(r.engine.stats().retained_bytes, 0, "nothing retained");
+    assert_eq!(
+        r.engine.stats().warming.retained_bytes,
+        0,
+        "nothing retained"
+    );
     let views = r.engine.router_views();
     r.advance(30_000);
     r.engine.step().await;
@@ -2637,7 +2644,10 @@ async fn a_tick_follows_a_resolution_for_a_compaction_open_on_an_ended_recipe() 
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.view("main").cause, r.engine.stats().retained_bytes),
+        (
+            r.view("main").cause,
+            r.engine.stats().warming.retained_bytes
+        ),
         (Reason::IdleLimit, 0),
         "the window ended main's recipe"
     );

@@ -237,7 +237,7 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
     assert!(main.body.as_ref().is_some_and(|body| !body.is_empty()));
     assert_eq!(
         (main.body_size, main.fast),
-        (stats.retained_bytes, false),
+        (stats.warming.retained_bytes, false),
         "the recipe's size is the retained bytes"
     );
 
@@ -253,8 +253,17 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
         Some(60),
         "the presence a minute before the restart"
     );
-    assert_eq!(second.stats().retained_bytes, stats.retained_bytes);
-    assert_eq!((second.stats().sessions, second.stats().agents), (1, 1));
+    assert_eq!(
+        second.stats().warming.retained_bytes,
+        stats.warming.retained_bytes
+    );
+    assert_eq!(
+        (
+            second.stats().sessions.entries,
+            second.stats().sessions.agents
+        ),
+        (1, 1)
+    );
     assert_eq!(second.sessions()[0].companion, CompanionState::Silent);
 }
 
@@ -453,7 +462,10 @@ async fn an_ended_session_and_an_expired_recipe_are_dropped_at_the_load_under_ex
     );
     assert!(second.recipes_for("desktop", "session").is_empty());
     assert_eq!(
-        (second.stats().sessions, second.stats().retained_bytes),
+        (
+            second.stats().sessions.entries,
+            second.stats().warming.retained_bytes
+        ),
         (1, 0)
     );
     assert_eq!(
@@ -838,7 +850,13 @@ async fn a_row_saved_with_the_static_hash_and_tail_pair_loads_with_no_boundary_b
     lapse_while_down(&r);
     let second = r.restart().await;
     second.load_persisted().await;
-    assert_eq!((second.stats().sessions, second.stats().agents), (1, 1));
+    assert_eq!(
+        (
+            second.stats().sessions.entries,
+            second.stats().sessions.agents
+        ),
+        (1, 1)
+    );
     assert_eq!(
         second.reasons().get(&Reason::ExpiredAtRestart).copied(),
         Some(1),
@@ -899,7 +917,10 @@ async fn a_body_that_cannot_be_opened_leaves_the_agent_without_a_recipe() {
     assert_eq!(main.cause, Reason::Reset);
     assert!(second.recipes_for("desktop", "session").is_empty());
     assert_eq!(
-        (second.stats().agents, second.stats().retained_bytes),
+        (
+            second.stats().sessions.agents,
+            second.stats().warming.retained_bytes
+        ),
         (1, 0)
     );
     assert_eq!(
@@ -1004,7 +1025,10 @@ async fn the_shutdown_quiesces_drains_saves_and_then_clears() {
     r.engine.shutdown().await;
 
     assert_eq!(
-        (r.engine.stats().sessions, r.engine.stats().retained_bytes),
+        (
+            r.engine.stats().sessions.entries,
+            r.engine.stats().warming.retained_bytes
+        ),
         (0, 0),
         "the clear came after the save"
     );
@@ -1697,7 +1721,7 @@ async fn two_sessions() -> (Rig, usize, usize) {
     // One probe the next request has not answered yet, which a disposal settles as wasted.
     r.advance_attended(270_000).await;
     r.step().await;
-    let older = r.engine.stats().retained_bytes;
+    let older = r.engine.stats().warming.retained_bytes;
     r.engine.flush_persisted().await;
     r.advance(MINUTE);
     r.event(session_start("newer")).await.unwrap();
@@ -1705,7 +1729,7 @@ async fn two_sessions() -> (Rig, usize, usize) {
         .await
         .unwrap();
     observe_on(&mut r, "newer", "main").await;
-    let newer = r.engine.stats().retained_bytes - older;
+    let newer = r.engine.stats().warming.retained_bytes - older;
     r.engine.flush_persisted().await;
     assert_eq!((saved_sessions(&r).len(), saved_agents(&r).len()), (2, 3));
     (r, older, newer)
@@ -1737,7 +1761,11 @@ async fn a_restart_under_smaller_limits_restores_the_newest_rows_and_disposes_th
         second.load_persisted().await;
         let stats = second.stats();
         assert_eq!(
-            (stats.sessions, stats.agents, stats.retained_bytes),
+            (
+                stats.sessions.entries,
+                stats.sessions.agents,
+                stats.warming.retained_bytes
+            ),
             (1, 2, newer),
             "{limits:?}"
         );
@@ -1775,7 +1803,11 @@ async fn a_restart_under_smaller_limits_restores_the_newest_rows_and_disposes_th
     second.load_persisted().await;
     let stats = second.stats();
     assert_eq!(
-        (stats.sessions, stats.agents, stats.retained_bytes),
+        (
+            stats.sessions.entries,
+            stats.sessions.agents,
+            stats.warming.retained_bytes
+        ),
         (2, 3, newer)
     );
     assert_eq!(second.reasons().get(&Reason::Evicted).copied(), Some(1));
@@ -1821,7 +1853,7 @@ async fn a_restart_under_the_session_cap_restores_the_session_that_sent_a_reques
     assert_eq!(
         (
             second.recipes_for("desktop", "session"),
-            second.stats().sessions
+            second.stats().sessions.entries
         ),
         (vec!["main".to_string()], 2)
     );
@@ -1959,7 +1991,11 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
     second.load_persisted().await;
     let stats = second.stats();
     assert_eq!(
-        (stats.sessions, stats.agents, stats.retained_bytes),
+        (
+            stats.sessions.entries,
+            stats.sessions.agents,
+            stats.warming.retained_bytes
+        ),
         (1, 1, main_bytes),
         "the session and its main agent load"
     );
@@ -2016,19 +2052,22 @@ async fn a_session_at_the_agent_limit_frees_a_slot_when_its_released_record_leav
     );
     r.advance_attended(3_599_999).await;
     assert_eq!(
-        (agent_start(&mut r, "other").await, r.engine.stats().agents),
+        (
+            agent_start(&mut r, "other").await,
+            r.engine.stats().sessions.agents
+        ),
         (Err(("agent_limit".to_string(), 429)), 2),
         "until one cache TTL has passed since the release"
     );
     r.advance_attended(1).await;
     r.step().await;
     assert_eq!(
-        r.engine.stats().agents,
+        r.engine.stats().sessions.agents,
         1,
         "the leave frees the released record's slot"
     );
     assert_eq!(agent_start(&mut r, "other").await, Ok(()));
-    assert_eq!(r.engine.stats().agents, 2);
+    assert_eq!(r.engine.stats().sessions.agents, 2);
 }
 
 /// A flush saves a probe nobody answered with the eight members read after a restart: its coverage, entry, unit and
@@ -2131,7 +2170,7 @@ async fn a_restored_released_record_leaves_at_the_first_tick_past_its_saved_leav
         lifecycle_of(&second, "session", "sub").is_none(),
         "the first tick past the leave removes the record"
     );
-    assert_eq!(second.stats().agents, 1);
+    assert_eq!(second.stats().sessions.agents, 1);
     second.flush_persisted().await;
     assert_eq!(
         saved_agents(&r)
@@ -2173,7 +2212,7 @@ async fn a_saved_released_record_whose_leave_passed_while_the_router_was_down_do
             loaded(&r, "sub-a"),
             loaded(&r, "sub-b"),
             loaded(&r, "worker"),
-            r.engine.stats().agents
+            r.engine.stats().sessions.agents
         ),
         (false, false, true, 2),
         "the released records do not load, and the live worker loads under the cap"
@@ -2184,7 +2223,7 @@ async fn a_saved_released_record_whose_leave_passed_while_the_router_was_down_do
         Ok(()),
         "a new agent registers under the cap at once"
     );
-    assert_eq!(r.engine.stats().agents, 3);
+    assert_eq!(r.engine.stats().sessions.agents, 3);
     r.engine.flush_persisted().await;
     let mut saved: Vec<String> = saved_agents(&r)
         .into_iter()
@@ -2403,8 +2442,8 @@ async fn a_flush_saves_the_class_of_a_seats_records_and_a_payload_from_before_th
     let older = r.restart().await;
     older.load_persisted().await;
     assert_eq!(
-        older.stats().retained_bytes,
-        r.engine.stats().retained_bytes,
+        older.stats().warming.retained_bytes,
+        r.engine.stats().warming.retained_bytes,
         "an observation from before the class loads"
     );
     r.advance(270_000);
@@ -2641,7 +2680,7 @@ async fn dropped_at_the_load_with_one_line(r: Rig, kept: serde_json::Value) {
     }
     let stats = second.stats();
     assert_eq!(
-        (stats.sessions, stats.agents),
+        (stats.sessions.entries, stats.sessions.agents),
         (0, 0),
         "the older session is not restored"
     );
@@ -2741,7 +2780,7 @@ async fn a_start_under_a_new_key_generation_leaves_one_saved_row_for_the_session
     assert!(saved_agents(&r).iter().all(|a| a.key_generation == later));
     let second = r.restart().await;
     second.load_persisted().await;
-    assert_eq!(second.stats().sessions, 1);
+    assert_eq!(second.stats().sessions.entries, 1);
     assert_eq!(second.sessions()[0].key_generation, later);
 }
 
@@ -2757,7 +2796,7 @@ async fn an_expired_session_leaves_the_registry_at_the_next_flush() {
     assert_eq!(saved_sessions(&r).len(), 1);
     r.advance(700_000);
     r.engine.expire();
-    assert_eq!(r.engine.stats().sessions, 0);
+    assert_eq!(r.engine.stats().sessions.entries, 0);
     r.engine.flush_persisted().await;
     assert!(saved_sessions(&r).is_empty());
     assert!(
@@ -2775,7 +2814,13 @@ async fn a_second_load_leaves_the_sessions_the_engine_holds_and_their_rows() {
     second.load_persisted().await;
     second.load_persisted().await;
     second.flush_persisted().await;
-    assert_eq!((second.stats().sessions, second.stats().agents), (1, 1));
+    assert_eq!(
+        (
+            second.stats().sessions.entries,
+            second.stats().sessions.agents
+        ),
+        (1, 1)
+    );
     assert_eq!(
         (saved_sessions(&r).len(), saved_agents(&r).len()),
         (1, 1),
@@ -2830,7 +2875,11 @@ async fn a_session_whose_main_agent_cannot_be_read_is_dropped_whole() {
 
     let stats = second.stats();
     assert_eq!(
-        (stats.sessions, stats.agents, stats.retained_bytes),
+        (
+            stats.sessions.entries,
+            stats.sessions.agents,
+            stats.warming.retained_bytes
+        ),
         (0, 0, 0),
         "no session comes back without the main agent its reports name"
     );

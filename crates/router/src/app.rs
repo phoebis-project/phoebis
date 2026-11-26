@@ -494,7 +494,7 @@ pub async fn run_until(
         )),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.
-        keepalive: keepalive.clone(),
+        engine: keepalive.clone(),
         attention: attention.clone(),
         readiness,
         claims: claims.clone(),

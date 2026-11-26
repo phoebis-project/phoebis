@@ -1014,7 +1014,7 @@ pub fn view_of(engine: &Engine, session_id: &str, agent: &str) -> Option<RecipeV
 /// send, so a read after the wait finds what each probe settled.
 pub async fn no_probe_running(engine: &Engine) {
     wait_for(Duration::from_secs(5), || {
-        (engine.stats().running_probes == 0).then_some(())
+        (engine.stats().warming.running_probes == 0).then_some(())
     })
     .await;
 }

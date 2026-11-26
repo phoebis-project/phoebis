@@ -1475,7 +1475,7 @@ pub(crate) async fn pool_context(
     // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
     let ((traffic, moves), ceilings, pins, spends, projections) = tokio::join!(
         ledger,
-        state.keepalive.ceiling_inputs(),
+        state.engine.ceiling_inputs(),
         state.router.pins(),
         state.router.member_spends(),
         projections,

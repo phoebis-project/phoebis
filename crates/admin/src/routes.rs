@@ -2129,7 +2129,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             0
         }
     };
-    let keepalive_stats = state.keepalive.stats();
+    let keepalive_stats = state.engine.stats();
     let writer = state.router.writer_status();
     let dead = state.readiness.dead();
     let dropped_reports = state
@@ -2214,12 +2214,12 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         },
         gaps: gaps.iter().map(crate::requests::event_json).collect(),
         keepalive: KeepaliveStats {
-            agents: keepalive_stats.agents,
-            bus_gaps: keepalive_stats.bus_gaps,
-            retained_bytes: keepalive_stats.retained_bytes,
-            running_probes: keepalive_stats.running_probes,
-            session_entries: keepalive_stats.sessions,
-            sessions: keepalive_stats.live_sessions,
+            agents: keepalive_stats.sessions.agents,
+            bus_gaps: keepalive_stats.warming.bus_gaps,
+            retained_bytes: keepalive_stats.warming.retained_bytes,
+            running_probes: keepalive_stats.warming.running_probes,
+            session_entries: keepalive_stats.sessions.entries,
+            sessions: keepalive_stats.sessions.live,
         },
     })
     .into_response()

@@ -10,7 +10,8 @@ use axum::Json;
 use phoebis_attention::{KeepaliveCap, KeepaliveFacts, KeepaliveStanding};
 use phoebis_ledger::{read_overview_rollups, trailing_day_hours, UNATTRIBUTED};
 use phoebis_session_engine::{
-    Engine, EngineStats, IdleReturns, KeepaliveLimits, Wasted, IDLE_AGE_BOUNDS_SECONDS,
+    Engine, IdleReturns, KeepaliveLimits, SessionCounts, WarmingCounts, Wasted,
+    IDLE_AGE_BOUNDS_SECONDS,
 };
 use utoipa::ToSchema;
 
@@ -89,8 +90,9 @@ pub(crate) struct IdleReturn {
     pub to_seconds: Option<u64>,
 }
 
-/// The engine as the attention reader sees it: the counters and the caps the overview answers, and the pools whose
-/// policy warms caches.
+/// The engine as the attention reader sees it, with the counters and the caps the overview answers: the counts of the
+/// two session caps from the session engine, and from the warming the bus gaps, the count of the byte cap and the pools
+/// whose policy warms caches.
 pub struct EngineFacts {
     pub engine: Arc<Engine>,
 }
@@ -98,35 +100,42 @@ pub struct EngineFacts {
 impl KeepaliveFacts for EngineFacts {
     fn standing(&self) -> KeepaliveStanding {
         let stats = self.engine.stats();
+        let [sessions, agents] = session_caps_of(&stats.sessions, self.engine.limits());
+        let retained = byte_cap_of(&stats.warming, self.engine.limits());
         KeepaliveStanding {
-            bus_gaps: stats.bus_gaps,
-            last_bus_gap_at: stats.last_bus_gap_at,
-            caps: caps_of(&stats, self.engine.limits()).into(),
+            bus_gaps: stats.warming.bus_gaps,
+            last_bus_gap_at: stats.warming.last_bus_gap_at,
+            caps: [sessions, agents, retained].into(),
             warming: self.engine.warming(),
         }
     }
 }
 
-/// The three caps, which the overview's `limits` and the reader's standing both read, so the two never count a cap
-/// differently.
-fn caps_of(stats: &EngineStats, limits: &KeepaliveLimits) -> [KeepaliveCap; 3] {
+/// The two session caps, `sessions` and then `agents`, which the overview's `limits` and the reader's standing both
+/// read, so the two never count a cap differently.
+fn session_caps_of(counts: &SessionCounts, limits: &KeepaliveLimits) -> [KeepaliveCap; 2] {
     [
         KeepaliveCap {
             name: "sessions",
-            count: stats.live_sessions,
+            count: counts.live,
             max: limits.max_sessions,
         },
         KeepaliveCap {
             name: "agents",
-            count: stats.agents,
+            count: counts.agents,
             max: limits.max_agents,
         },
-        KeepaliveCap {
-            name: "retained",
-            count: stats.retained_bytes,
-            max: limits.max_retained_bytes,
-        },
     ]
+}
+
+/// The byte cap, `retained`, which the overview's `limits` and the reader's standing both read, so the two never count
+/// a cap differently.
+fn byte_cap_of(counts: &WarmingCounts, limits: &KeepaliveLimits) -> KeepaliveCap {
+    KeepaliveCap {
+        name: "retained",
+        count: counts.retained_bytes,
+        max: limits.max_retained_bytes,
+    }
 }
 
 /// `recipes`, one row per agent that has sent a real request.
@@ -148,7 +157,7 @@ pub(crate) struct Recipes {
 )]
 pub(crate) async fn recipes(State(state): State<Arc<AdminState>>) -> Response {
     Json(Recipes {
-        recipes: state.keepalive.recipes(),
+        recipes: state.engine.recipes(),
     })
     .into_response()
 }
@@ -227,7 +236,7 @@ pub(crate) async fn overview(
             *entry.wasted_reasons.entry(reason.clone()).or_default() += count;
         }
     }
-    let returns = state.keepalive.idle_returns_over(now, days);
+    let returns = state.engine.idle_returns_over(now, days);
     for pool in returns.keys() {
         pools.entry(pool.clone()).or_default();
     }
@@ -262,16 +271,18 @@ pub(crate) async fn overview(
             }
         })
         .collect();
-    let stats = state.keepalive.stats();
-    let [sessions, agents, retained] = caps_of(&stats, state.keepalive.limits()).map(|c| Limit {
+    let stats = state.engine.stats();
+    let limit = |c: KeepaliveCap| Limit {
         count: c.count,
         max: c.max,
-    });
+    };
+    let [sessions, agents] = session_caps_of(&stats.sessions, state.engine.limits()).map(limit);
+    let retained = limit(byte_cap_of(&stats.warming, state.engine.limits()));
     Json(KeepaliveOverview {
-        agents: state.keepalive.agent_counts(),
-        bus_gaps: stats.bus_gaps,
+        agents: state.engine.agent_counts(),
+        bus_gaps: stats.warming.bus_gaps,
         expired_between_turns_24h: expired,
-        last_bus_gap_at: stats.last_bus_gap_at,
+        last_bus_gap_at: stats.warming.last_bus_gap_at,
         limits: OverviewLimits {
             agents,
             retained_bytes: retained,

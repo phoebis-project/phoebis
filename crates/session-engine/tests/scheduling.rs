@@ -1188,7 +1188,7 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
         (
             r.view("main").cause,
             r.view("main").next_probe_at,
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (Reason::KeyOptedOut, None, 0),
         "the recipe is gone"
@@ -1521,12 +1521,12 @@ async fn the_session_expiry_discards_recipes_and_the_scheduler_ticks() {
     );
     assert_eq!(
         (
-            r.engine.stats().retained_bytes,
+            r.engine.stats().warming.retained_bytes,
             r.engine.reasons().get(&Reason::SessionExpired).copied()
         ),
         (0, Some(1))
     );
-    assert_eq!(r.engine.stats().sessions, 0);
+    assert_eq!(r.engine.stats().sessions.entries, 0);
     let r = rig(RigSpec::default()).await;
     let scheduler = r.engine.spawn_scheduler();
     r.engine.shutdown().await;
@@ -1714,7 +1714,10 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(
-        (r.view("main").cause, r.engine.stats().retained_bytes),
+        (
+            r.view("main").cause,
+            r.engine.stats().warming.retained_bytes
+        ),
         (Reason::KeyOptedOut, 0),
         "the opt-out discarded the paused recipe"
     );
@@ -1752,7 +1755,7 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     assert_eq!(
         (
             r.view("main").cause,
-            r.engine.stats().retained_bytes,
+            r.engine.stats().warming.retained_bytes,
             unanswered
         ),
         (Reason::IdleLimit, 0, 1),

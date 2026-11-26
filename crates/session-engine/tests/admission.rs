@@ -60,7 +60,7 @@ async fn a_real_request_through_the_relay_arms_a_recipe_and_a_probe_is_ignored()
         Some(r.now() + 270_000),
         "cache start plus TTL less the 30 s lead, no jitter"
     );
-    assert!(r.engine.stats().retained_bytes > 0);
+    assert!(r.engine.stats().warming.retained_bytes > 0);
     // The ledger writes on its own subscriber task, a step behind the engine's, so the row lands a moment
     // after `observe` already saw the completion.
     landed(&r, &id).await;
@@ -153,7 +153,7 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
         (Reason::OptedOut, None)
     );
     assert_eq!(
-        r.engine.stats().retained_bytes,
+        r.engine.stats().warming.retained_bytes,
         0,
         "a refused request retains nothing"
     );
@@ -174,7 +174,10 @@ async fn a_request_on_a_keepalive_off_pool_keeps_no_body_at_its_arrival_while_on
     .await;
     r.engine.observe(r.observed("off", "main", BODY));
     assert_eq!(
-        (r.engine.stats().retained_bytes, r.view("main").cause),
+        (
+            r.engine.stats().warming.retained_bytes,
+            r.view("main").cause
+        ),
         (0, Reason::KeepaliveOff),
         "the arrival on the keepalive-off pool kept no body and read the refusal"
     );
@@ -186,7 +189,10 @@ async fn a_request_on_a_keepalive_off_pool_keeps_no_body_at_its_arrival_while_on
     r.h.router.reload().await.unwrap();
     r.engine.observe(r.observed("on", "main", BODY));
     assert_eq!(
-        (r.engine.stats().retained_bytes > 0, r.view("main").cause),
+        (
+            r.engine.stats().warming.retained_bytes > 0,
+            r.view("main").cause
+        ),
         (true, Reason::AwaitingSelection),
         "the arrival on the probing pool kept its body for the selection"
     );
@@ -204,7 +210,7 @@ async fn a_request_on_a_session_registered_with_the_warming_off_retains_nothing_
     r.observe("main").await;
     assert_eq!(
         (
-            r.engine.stats().retained_bytes,
+            r.engine.stats().warming.retained_bytes,
             r.view("main").cause,
             r.view("main").next_probe_at
         ),
@@ -226,7 +232,7 @@ async fn a_registration_that_turns_the_warming_off_drops_the_held_prompt_and_set
         .unwrap();
     assert_eq!(
         (
-            r.engine.stats().retained_bytes,
+            r.engine.stats().warming.retained_bytes,
             r.view("main").cause,
             r.view("main").next_probe_at
         ),
@@ -264,7 +270,7 @@ async fn a_request_behind_a_registration_that_turns_the_warming_back_on_is_retai
     r.observe("main").await;
     assert_eq!(
         (
-            r.engine.stats().retained_bytes > 0,
+            r.engine.stats().warming.retained_bytes > 0,
             r.view("main").next_probe_at
         ),
         (true, Some(r.now() + 270_000)),
@@ -311,7 +317,7 @@ async fn an_oauth_account_on_an_enabled_pool_retains_its_recipe() {
         (status.cause, status.account_id.as_deref()),
         (Reason::Scheduled, Some("o"))
     );
-    assert!(r.engine.stats().retained_bytes > 0);
+    assert!(r.engine.stats().warming.retained_bytes > 0);
 }
 
 /// A request the guard sets aside never touches `reason`, so the admin view still reads the recipe armed
@@ -367,7 +373,7 @@ async fn a_replaced_registration_and_a_foreign_instance_header_are_not_retained(
     // The new main has sent no request, so the session view words it: busy under `AwaitingRequest` reads
     // `registered`.
     assert_eq!(
-        (r.engine.stats().retained_bytes, r.lifecycle("main")),
+        (r.engine.stats().warming.retained_bytes, r.lifecycle("main")),
         (0, Some(Lifecycle::Registered))
     );
     // Traffic that names the replaced instance is ledgered and not retained, traffic without the header is admitted
@@ -418,7 +424,7 @@ async fn a_replaced_registration_and_a_foreign_instance_header_are_not_retained(
     // not its reason, not its schedule, not what it retains.
     let armed = r.view("main");
     assert!(armed.next_probe_at.is_some());
-    let retained = r.engine.stats().retained_bytes;
+    let retained = r.engine.stats().warming.retained_bytes;
     let mut req = r.request("main");
     relay_common::set_header(&mut req, "x-phoebis-instance-id", "instance");
     let resp = r.h.app.clone().oneshot(req).await.unwrap();
@@ -429,7 +435,7 @@ async fn a_replaced_registration_and_a_foreign_instance_header_are_not_retained(
         (
             r.view("main").cause,
             r.view("main").next_probe_at,
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (armed.cause, armed.next_probe_at, retained)
     );
@@ -672,7 +678,7 @@ async fn a_stream_arms_before_completion_and_a_cancel_discards() {
     r.engine.observe(r.complete("req", Outcome::Canceled, None));
     assert_eq!(
         (
-            r.engine.stats().retained_bytes,
+            r.engine.stats().warming.retained_bytes,
             r.view("main").next_probe_at,
             r.view("main").cause
         ),
@@ -709,7 +715,7 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
         "agent_limit",
         "the agent limit holds"
     );
-    let held = r.engine.stats().retained_bytes;
+    let held = r.engine.stats().warming.retained_bytes;
     assert!(held > 0);
     // Past the relay's 32 MiB body bound, which is the largest body a recipe may retain.
     let large = format!(
@@ -718,7 +724,10 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     );
     r.engine.observe(r.observed("large", "main", &large));
     assert_eq!(
-        (r.engine.stats().retained_bytes, r.view("main").cause),
+        (
+            r.engine.stats().warming.retained_bytes,
+            r.view("main").cause
+        ),
         (0, Reason::RequestTooLarge),
         "an oversized request discards the old recipe and retains nothing"
     );
@@ -755,7 +764,7 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     let one = {
         let mut sized = rig(RigSpec::default()).await;
         sized.observe("main").await;
-        sized.engine.stats().retained_bytes
+        sized.engine.stats().warming.retained_bytes
     };
     let mut r3 = rig(RigSpec {
         limits: KeepaliveLimits {
@@ -843,7 +852,7 @@ async fn a_registered_session_holds_no_slot_until_its_first_request_and_one_over
         .await
         .expect("the rig's session has sent nothing, so it holds no slot");
     arm(&r, "first", "session", "main", 1_000);
-    let held = r.engine.stats().retained_bytes;
+    let held = r.engine.stats().warming.retained_bytes;
     arm(&r, "second", "other", "main", 1_000);
     let other = view_of(&r.engine, "other", "main").unwrap();
     assert_eq!(
@@ -851,8 +860,8 @@ async fn a_registered_session_holds_no_slot_until_its_first_request_and_one_over
             other.cause,
             other.state,
             r.engine.recipes_for("desktop", "session"),
-            r.engine.stats().retained_bytes,
-            r.engine.stats().live_sessions,
+            r.engine.stats().warming.retained_bytes,
+            r.engine.stats().sessions.live,
         ),
         (
             Reason::SessionLimit,
@@ -898,7 +907,7 @@ async fn a_first_request_whose_agents_pass_the_agent_cap_keeps_nothing_and_takes
         .await
         .expect("the rig's main holds no agent slot before its session's first request");
     arm(&r, "first", "session", "main", 1_000);
-    let held = r.engine.stats().retained_bytes;
+    let held = r.engine.stats().warming.retained_bytes;
     arm(&r, "second", "other", "main", 1_000);
     let other = view_of(&r.engine, "other", "main").unwrap();
     let stats = r.engine.stats();
@@ -906,9 +915,9 @@ async fn a_first_request_whose_agents_pass_the_agent_cap_keeps_nothing_and_takes
         (
             other.cause,
             other.state,
-            stats.retained_bytes,
-            stats.live_sessions,
-            stats.agents,
+            stats.warming.retained_bytes,
+            stats.sessions.live,
+            stats.sessions.agents,
         ),
         (Reason::AgentLimit, RecipeState::NotRetained, held, 1, 1)
     );
@@ -1197,7 +1206,8 @@ async fn a_bus_gap_discards_the_pending_observation_and_keeps_an_armed_recipe() 
     for i in 0..(phoebis_bus::QUEUE_DEPTH + 64) {
         filler.publish(r.chunk("noise", i as u32, ""));
     }
-    r.pump_until(|r| r.engine.stats().bus_gaps >= 1).await;
+    r.pump_until(|r| r.engine.stats().warming.bus_gaps >= 1)
+        .await;
     assert_eq!(
         (r.view("main").cause, r.view("main").next_probe_at),
         (Reason::BusGap, None),
@@ -1208,7 +1218,7 @@ async fn a_bus_gap_discards_the_pending_observation_and_keeps_an_armed_recipe() 
         Reason::Scheduled,
         "the armed recipe stays"
     );
-    assert!(r.engine.stats().retained_bytes > 0);
+    assert!(r.engine.stats().warming.retained_bytes > 0);
     // A completion for the discarded request lands nowhere.
     r.engine
         .observe(r.complete("open", Outcome::Succeeded, Some(usage(2_000, 0))));
@@ -1277,8 +1287,8 @@ async fn reason_counters_measure_the_gates_and_survive_close() {
         Some(1),
         "close keeps the counters"
     );
-    assert_eq!(r.engine.stats().retained_bytes, 0);
-    assert_eq!(r.engine.stats().agents, 0);
+    assert_eq!(r.engine.stats().warming.retained_bytes, 0);
+    assert_eq!(r.engine.stats().sessions.agents, 0);
 }
 
 /// A gap drops one event and leaves the rest of the queue behind it. A request observed inside that backlog
@@ -1297,7 +1307,7 @@ async fn a_request_observed_inside_a_gaps_backlog_never_arms() {
         (
             r.view("main").cause,
             r.view("main").next_probe_at,
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (Reason::BusGap, None, 0),
         "the request inside the backlog armed nothing"
@@ -1308,7 +1318,7 @@ async fn a_request_observed_inside_a_gaps_backlog_never_arms() {
     r.engine
         .observe(r.complete("after", Outcome::Succeeded, Some(usage(2_000, 0))));
     assert_eq!(r.view("main").cause, Reason::Scheduled);
-    assert!(r.view("main").next_probe_at.is_some() && r.engine.stats().retained_bytes > 0);
+    assert!(r.view("main").next_probe_at.is_some() && r.engine.stats().warming.retained_bytes > 0);
 }
 
 /// An auxiliary or a foreign request must leave an armed recipe's schedule and retained bytes exactly as they
@@ -1318,7 +1328,7 @@ async fn a_title_shaped_request_on_another_model_leaves_the_recipe_alone() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let armed_probe_at = r.view("main").next_probe_at;
-    let armed_bytes = r.engine.stats().retained_bytes;
+    let armed_bytes = r.engine.stats().warming.retained_bytes;
     r.engine.observe(r.observed_with(
         "aux",
         "main",
@@ -1331,7 +1341,7 @@ async fn a_title_shaped_request_on_another_model_leaves_the_recipe_alone() {
     assert_eq!(
         (
             r.view("main").next_probe_at,
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (armed_probe_at, armed_bytes),
         "an auxiliary class leaves the schedule and the recipe alone"
@@ -1348,7 +1358,7 @@ async fn a_title_shaped_request_on_another_model_leaves_the_recipe_alone() {
         "claude-opus-5",
     ));
     assert_eq!(
-        (r.view("main").next_probe_at, r.engine.stats().retained_bytes),
+        (r.view("main").next_probe_at, r.engine.stats().warming.retained_bytes),
         (armed_probe_at, armed_bytes),
         "a request matching neither the chain nor the static prefix leaves the schedule and the recipe alone"
     );
@@ -1359,7 +1369,7 @@ async fn a_title_shaped_request_on_another_model_leaves_the_recipe_alone() {
 async fn a_tool_loop_request_re_arms_the_recipe() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    let armed_bytes = r.engine.stats().retained_bytes;
+    let armed_bytes = r.engine.stats().warming.retained_bytes;
     let extended = BODY.replace(
         r#"{"role":"user","content":"hello"}]"#,
         r#"{"role":"user","content":"hello"},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}]"#,
@@ -1372,7 +1382,7 @@ async fn a_tool_loop_request_re_arms_the_recipe() {
         "a tool round continues the conversation, so it re-arms normally"
     );
     assert!(
-        r.engine.stats().retained_bytes > armed_bytes,
+        r.engine.stats().warming.retained_bytes > armed_bytes,
         "the recipe body is the new, larger one"
     );
 }
@@ -1507,10 +1517,13 @@ async fn a_compaction_leaves_the_armed_recipe_its_retained_bytes_and_its_reason_
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let armed = without_guard(&r, "main");
-    let retained = r.engine.stats().retained_bytes;
+    let retained = r.engine.stats().warming.retained_bytes;
     r.engine.observe(compaction(&r, "compaction"));
     assert_eq!(
-        (without_guard(&r, "main"), r.engine.stats().retained_bytes),
+        (
+            without_guard(&r, "main"),
+            r.engine.stats().warming.retained_bytes
+        ),
         (armed, retained),
         "the compaction left the recipe, its schedule and its bytes as they stood"
     );
@@ -1545,11 +1558,14 @@ async fn a_compaction_that_ends_short_keeps_the_previous_recipe(
         (Some("a"), 1, 1, Reason::Scheduled),
         "{before:?}"
     );
-    let retained = r.engine.stats().retained_bytes;
+    let retained = r.engine.stats().warming.retained_bytes;
     r.advance_attended(10_000).await;
     compact(&r, "compaction", "b", status, read, outcome);
     assert_eq!(
-        (without_guard(&r, "main"), r.engine.stats().retained_bytes),
+        (
+            without_guard(&r, "main"),
+            r.engine.stats().warming.retained_bytes
+        ),
         (before, retained),
         "{outcome:?}: the recipe, its schedule, its account and its probe stand as they stood"
     );
@@ -1621,7 +1637,7 @@ async fn a_completed_compaction_answers_the_chain_earns_its_credit_and_stops_the
             status.cause,
             status.next_probe_at,
             r.saved_unanswered("main").await,
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (Reason::Compacted, None, 0, 0),
         "{status:?}"
@@ -1787,7 +1803,10 @@ async fn an_open_compaction_holds_the_recipe_unprobed_and_a_bus_gap_ends_it_as_a
     r.engine.bus_gap(1, 0);
     r.engine.observe(completed(&r, "compaction", 2_000));
     assert_eq!(
-        (r.view("main").cause, r.engine.stats().retained_bytes > 0),
+        (
+            r.view("main").cause,
+            r.engine.stats().warming.retained_bytes > 0
+        ),
         (Reason::Scheduled, true),
         "the completion of the compaction the gap ended landed nowhere"
     );
@@ -1825,7 +1844,7 @@ async fn a_turn_admitted_while_a_compaction_is_open_ends_the_compaction_as_a_fai
         (
             status.cause,
             r.saved_unanswered("main").await,
-            r.engine.stats().retained_bytes > 0
+            r.engine.stats().warming.retained_bytes > 0
         ),
         (Reason::Scheduled, 1, true),
         "the turn's recipe and the probe it keeps stand: {status:?}"
@@ -1927,7 +1946,7 @@ async fn the_lapse_sweep_leaves_the_probes_of_an_open_compaction_to_its_completi
 async fn the_same_static_prefix_on_a_fresh_chain_restarts_the_recipe() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    let before_restart = r.engine.stats().retained_bytes;
+    let before_restart = r.engine.stats().warming.retained_bytes;
     let restarted = BODY.replace("hello", "a fresh conversation");
     assert_ne!(restarted, BODY);
     r.observe_with("main", &restarted).await;
@@ -1937,7 +1956,7 @@ async fn the_same_static_prefix_on_a_fresh_chain_restarts_the_recipe() {
         "the same system prompt on a fresh chain restarts rather than staying foreign"
     );
     assert_ne!(
-        r.engine.stats().retained_bytes,
+        r.engine.stats().warming.retained_bytes,
         before_restart,
         "the restart replaced the body"
     );

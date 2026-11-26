@@ -15,3 +15,4 @@ pub(crate) mod requests;
 pub(crate) mod savings;
 pub(crate) mod state;
 pub(crate) mod usage;
+pub(crate) mod view;

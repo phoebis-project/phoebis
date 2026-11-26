@@ -1609,7 +1609,7 @@ async fn build_app_bounded(
         pricing: pricing.clone(),
         tables,
         settings,
-        keepalive: keepalive.clone(),
+        engine: keepalive.clone(),
         attention: attention.clone(),
         readiness: Arc::new(Readiness {
             ledger: ledger.clone(),

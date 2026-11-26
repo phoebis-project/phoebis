@@ -7,7 +7,6 @@ use phoebis_bus::user_agent_of;
 use phoebis_ledger::Band;
 use phoebis_routing::SEVEN_DAY;
 
-use crate::engine::view::{recipe_state, RecipeState};
 use crate::sessions::state::{agent_ref, AgentState, SessionKey, SessionsState, AGENT_HELD};
 use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
 use crate::warming::causes::{Reason, Wasted};
@@ -16,6 +15,7 @@ use crate::warming::recipe::Recipe;
 use crate::warming::savings::{AttemptFunding, RowClient, SavingsUnit};
 use crate::warming::state::{Changes, WarmingState};
 use crate::warming::usage::ProbeUsage;
+use crate::warming::view::{recipe_state, RecipeState};
 
 /// The share of the previous main prompt a completion must read from the cache, under a chain that holds none of the
 /// anchor's boundaries, for the engine to read a contradiction between its chain model and the upstream's.

@@ -476,7 +476,7 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     r.advance(90_000);
     r.step().await;
     assert!(
-        r.engine.stats().retained_bytes > 0,
+        r.engine.stats().warming.retained_bytes > 0,
         "a lapsed lease keeps the recipe"
     );
     assert_eq!(
@@ -512,7 +512,7 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
         (
             r.view("main").probes_today,
             r.view("main").cause,
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (1, Reason::IdleLimit, 0),
         "540 s past the last real request, over the 500 s limit"
@@ -521,12 +521,15 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     r.state("main", "released").await;
-    assert_eq!(r.engine.stats().retained_bytes, 0);
+    assert_eq!(r.engine.stats().warming.retained_bytes, 0);
     r.engine.observe(r.observed("late", "main", BODY));
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.view("main").probes_today, r.engine.stats().retained_bytes),
+        (
+            r.view("main").probes_today,
+            r.engine.stats().warming.retained_bytes
+        ),
         (0, 0)
     );
 }
@@ -600,7 +603,7 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
     r.up.release();
     no_probe_running(&r.engine).await;
     assert_eq!(
-        r.engine.stats().running_probes,
+        r.engine.stats().warming.running_probes,
         0,
         "new_request: no worker leaked"
     );
@@ -637,18 +640,18 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
     r.up.release();
     no_probe_running(&r.engine).await;
     assert_eq!(
-        r.engine.stats().running_probes,
+        r.engine.stats().warming.running_probes,
         0,
         "close: no worker leaked"
     );
-    assert_eq!(r.engine.stats().retained_bytes, 0);
+    assert_eq!(r.engine.stats().warming.retained_bytes, 0);
 
     let mut r = a_probe_held_upstream().await;
     r.state("main", "released").await;
     r.up.release();
     no_probe_running(&r.engine).await;
     assert_eq!(
-        r.engine.stats().running_probes,
+        r.engine.stats().warming.running_probes,
         0,
         "release: no worker leaked"
     );
@@ -764,7 +767,10 @@ async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lap
     r.advance(270_000);
     r.engine.step().await;
     assert_eq!(
-        (r.view("main").cause, r.engine.stats().retained_bytes),
+        (
+            r.view("main").cause,
+            r.engine.stats().warming.retained_bytes
+        ),
         (Reason::IdleLimit, 0),
         "the ceiling ended the recipe while its probe was in flight"
     );
@@ -981,7 +987,7 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
     r.step().await;
     assert_eq!(
         (
-            r.engine.stats().running_probes,
+            r.engine.stats().warming.running_probes,
             r.view("main").cause,
             r.view("main").next_probe_at
         ),
@@ -1005,7 +1011,7 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
-    assert_eq!(r.engine.stats().running_probes, 1);
+    assert_eq!(r.engine.stats().warming.running_probes, 1);
     tokio::time::pause();
     tokio::time::advance(
         phoebis_session_engine::PROBE_DEADLINE + std::time::Duration::from_secs(1),
@@ -1047,7 +1053,7 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
     .await;
     let done = tokio::time::timeout(std::time::Duration::from_secs(5), r.engine.shutdown()).await;
     assert!(done.is_ok(), "shutdown waited on a stalled probe");
-    assert_eq!(r.engine.stats().running_probes, 0);
+    assert_eq!(r.engine.stats().warming.running_probes, 0);
     r.up.release();
 }
 
@@ -1087,7 +1093,7 @@ async fn concurrency_is_bounded_by_max_workers_alone() {
     .await;
     r.engine.step().await;
     assert_eq!(
-        (r.engine.stats().running_probes, probes(&r)),
+        (r.engine.stats().warming.running_probes, probes(&r)),
         (MAX_WORKERS, MAX_WORKERS as u64),
         "every worker holds a probe in flight, and the fifth due agent waits"
     );

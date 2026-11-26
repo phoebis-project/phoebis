@@ -573,7 +573,7 @@ async fn a_paused_recipe_drops_its_prompt_at_its_entrys_expiry_and_still_reads_p
     r.step().await;
     let warm = row(&r, "main");
     assert!(
-        r.engine.stats().retained_bytes > 0,
+        r.engine.stats().warming.retained_bytes > 0,
         "the entry is warm a millisecond short of its expiry: {warm:?}"
     );
     r.advance_attended(1).await;
@@ -585,7 +585,7 @@ async fn a_paused_recipe_drops_its_prompt_at_its_entrys_expiry_and_still_reads_p
             cold.state,
             cold.cause,
             saved["paused"].clone(),
-            r.engine.stats().retained_bytes,
+            r.engine.stats().warming.retained_bytes,
             cold.probes_today,
             cold.next_probe_at
         ),

@@ -435,7 +435,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .as_millis() as i64;
     let engine: std::collections::BTreeMap<SessionSpendKey, phoebis_session_engine::SessionView> =
         state
-            .keepalive
+            .engine
             .sessions()
             .into_iter()
             .map(|s| (session_key(&s.key_id, s.key_generation, &s.session_id), s))
@@ -636,7 +636,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // Behind the retention, so the registry is asked for the listed rows alone. A stored set belongs to the generation
     // that reported it, so a row of an earlier holder is not asked for and reads none.
     let stored = state
-        .keepalive
+        .engine
         .stored_facts(
             rows.keys()
                 .filter(|key| live.get(&key.key_id) == Some(&key.key_generation))
@@ -682,7 +682,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         SessionSpendKey,
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
-    for recipe in state.keepalive.recipes() {
+    for recipe in state.engine.recipes() {
         let Some(&generation) = live.get(&recipe.key_id) else {
             continue;
         };

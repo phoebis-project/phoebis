@@ -1252,7 +1252,7 @@ async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_regi
     agent_start(&mut r, "worker", None).await.unwrap();
     r.state("worker", "released").await;
     let released = r.request_generation("worker");
-    assert_eq!((released, r.engine.stats().agents), (1, 2));
+    assert_eq!((released, r.engine.stats().sessions.agents), (1, 2));
     r.advance_attended(3_599_999).await;
     assert_eq!(
         idle_report(&mut r, "worker", released).await,
@@ -1266,7 +1266,7 @@ async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_regi
         "the sweep at the leave removes the record"
     );
     assert_eq!(
-        (r.engine.stats().agents, session_agents(&r)),
+        (r.engine.stats().sessions.agents, session_agents(&r)),
         (1, 1),
         "the engine's count and the session's drop by the record"
     );
@@ -1285,7 +1285,10 @@ async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_regi
         (0, Some(Lifecycle::Registered)),
         "a new record, not the released one"
     );
-    assert_eq!((r.engine.stats().agents, session_agents(&r)), (2, 2));
+    assert_eq!(
+        (r.engine.stats().sessions.agents, session_agents(&r)),
+        (2, 2)
+    );
 }
 
 /// A start under the released record's generation before the record left reuses it, and the reuse clears the leave,
@@ -1306,14 +1309,14 @@ async fn a_start_before_a_released_agent_leaves_reuses_its_record_and_clears_the
         (
             r.request_generation("worker"),
             r.lifecycle("worker"),
-            r.engine.stats().agents
+            r.engine.stats().sessions.agents
         ),
         (released + 1, Some(Lifecycle::Registered), 2)
     );
     r.advance_attended(3_600_000).await;
     r.step().await;
     assert_eq!(
-        (r.lifecycle("worker"), r.engine.stats().agents),
+        (r.lifecycle("worker"), r.engine.stats().sessions.agents),
         (Some(Lifecycle::Registered), 2),
         "the reused record stays past the release's leave"
     );
@@ -2113,7 +2116,7 @@ async fn a_revival_inside_the_cache_ttl_keeps_main_and_clears_its_leave() {
     r.step().await;
     // The revival leaves main busy under `AwaitingRequest`, which the session view words `registered`.
     assert_eq!(
-        (r.lifecycle("main"), r.engine.stats().agents),
+        (r.lifecycle("main"), r.engine.stats().sessions.agents),
         (Some(Lifecycle::Registered), 1),
         "the revived main stays past the end's leave"
     );
@@ -2132,7 +2135,7 @@ async fn a_revival_after_mains_record_left_registers_main_anew() {
         r.lifecycle("main").is_none(),
         "main's record left one cache TTL after the end"
     );
-    assert_eq!(r.engine.stats().agents, 0);
+    assert_eq!(r.engine.stats().sessions.agents, 0);
     let revived = r.reregister().await;
     assert_eq!(
         serde_json::to_value(&revived.agents).unwrap(),
@@ -2141,7 +2144,10 @@ async fn a_revival_after_mains_record_left_registers_main_anew() {
     );
     // Busy under `AwaitingRequest`, which the session view words `registered`.
     assert_eq!(r.lifecycle("main"), Some(Lifecycle::Registered));
-    assert_eq!((r.engine.stats().agents, session_agents(&r)), (1, 1));
+    assert_eq!(
+        (r.engine.stats().sessions.agents, session_agents(&r)),
+        (1, 1)
+    );
 }
 
 /// The revival that registers main anew counts against the agent cap as any new record does, and a refused one leaves

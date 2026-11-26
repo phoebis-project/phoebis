@@ -539,7 +539,7 @@ async fn a_horizon_hold_ends_expired_once_its_entry_lapses_and_shows_no_probe_du
     );
     tick_to(&mut r, expires - 1).await;
     assert!(
-        retained(&r, "main") && r.engine.stats().retained_bytes > 0,
+        retained(&r, "main") && r.engine.stats().warming.retained_bytes > 0,
         "{:?}",
         r.view("main")
     );
@@ -548,7 +548,7 @@ async fn a_horizon_hold_ends_expired_once_its_entry_lapses_and_shows_no_probe_du
         (
             r.view("main").cause,
             retained(&r, "main"),
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (Reason::Expired, false, 0),
         "the cold body is freed at its expiry"
@@ -763,7 +763,7 @@ async fn a_raised_horizon_releases_a_held_recipe_and_a_key_opt_out_discards_it()
         (
             r.view("main").cause,
             retained(&r, "main"),
-            r.engine.stats().retained_bytes
+            r.engine.stats().warming.retained_bytes
         ),
         (Reason::KeyOptedOut, false, 0),
         "the opt-out discards the held prompt"

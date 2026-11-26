@@ -102,7 +102,8 @@ pub struct AdminState {
     /// settings echo and a session's burn price through what the rest of the process prices through.
     pub tables: Arc<phoebis_ledger::PlanTables>,
     pub settings: Arc<SettingsView>,
-    pub keepalive: Arc<Engine>,
+    /// One handle on both the session engine and the cache warming, whose states share the engine's lock.
+    pub engine: Arc<Engine>,
     /// The condition reader the metrics listener scrapes too, so the attention route and a scrape never disagree.
     pub attention: Arc<phoebis_attention::Attention>,
     /// The same reads `/api/ready` answers from, so `GET /admin/system` and the proxy listener agree.
