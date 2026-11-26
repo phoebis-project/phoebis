@@ -427,7 +427,7 @@ const hasDestination = (accountId: string, keyId: string): boolean => {
  * that holds state on its account, whose flag the figures carry, and one whose pool holds no destination for it by
  * `hasDestination`.
  */
-const moveFiguresOf = (pin: Parameters<typeof droppedThinkingOf>[0], tokens: number | null, ttlMs: number): Pick<Session, 'accountBound' | 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
+const moveFiguresOf = (pin: Parameters<typeof droppedThinkingOf>[0], tokens: number | null, ttlMs: number): Pick<AgentContext, 'accountBound' | 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
   const accountBound = accountBoundAt(pinKeyFor(pin.keyId, pin.sessionId, pin.agentId, pin.model), NOW);
   const dropped = droppedThinkingOf(pin, NOW);
   const client = CLIENTS[pin.keyId] ?? null;
@@ -1635,7 +1635,7 @@ export const poolPinsAt = (now: number, sessions: readonly Session[], keyIds: Re
         const mark = line.agentId === s.agentId && line.model === s.model ? s.mark : null;
         return [
           {
-            accountBound: line.accountBound === true,
+            accountBound: line.accountBound,
             accountId: line.accountId,
             agentId: line.agentId,
             burn: line.burn,

@@ -2154,7 +2154,7 @@ export interface MoveFigures {
 export interface AgentContext extends BurnFigures, MoveFigures {
   /** Whether the pin holds state on its account, such as a file, a container or a skill, so that the router keeps it
    *  there. */
-  accountBound: boolean | null;
+  accountBound: boolean;
   /** The pin's account. */
   accountId: string;
   agentId: string;

@@ -288,6 +288,11 @@ export function ReadNotice({ className, error, name, retry }: { className: strin
   );
 }
 
+/** A failed read named in a muted line, for a place that offers no retry, which `ReadNotice` adds. */
+export function ReadFailed({ error, name }: { error: string | null; name: string }) {
+  return <p className="muted">Could not load the {name}: {error}</p>;
+}
+
 /** A table's one row for a read that failed: the error state across the columns. */
 export function ErrorRow({ colSpan, error, errorTitle, retry }: { colSpan: number; error: string; errorTitle: string; retry?: () => void }) {
   return (

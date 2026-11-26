@@ -32,7 +32,7 @@ import { clock } from '@/lib/clock';
 import { groupInto } from '@/lib/counts';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, REQUEST_KIND_LABEL, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { keyOptions, notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, rowsRefreshTitle, shownCount, shownWords, spanEnded } from '@/lib/follow';
+import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, rowsRefreshTitle, shownWords, spanEnded } from '@/lib/follow';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, plural, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useHashSection, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
@@ -322,7 +322,7 @@ export function RequestsPage() {
   const requests = useAsync(() => api.listRequests(query), [query]);
   // The open drawer reads one of the rows, and an open menu or popover under the bar stands over the list, so the poll
   // waits for either to close. Under the feature calls the list is not drawn, so it waits there too.
-  const { error, fresh, goNext, nextCursor, overrun, rows, setFollowed, shownCursor } = useFollow<RequestLog>({
+  const { count, error, fresh, goNext, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
     address,
     compare: requestOrder(order, dir),
     cursor,
@@ -394,7 +394,7 @@ export function RequestsPage() {
           <div className={`requests ${requestId ? 'has-drawer' : ''}`} {...sectionPanel('requests')}>
             <FilterBar
               address={address}
-              count={shownCount(rows, shownCursor, requests.data !== null)}
+              count={count}
               countSizer={WIDEST_COUNT}
               dimensions={REQUESTS_DIMENSIONS}
               disabled={disabled}

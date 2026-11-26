@@ -7,7 +7,7 @@ import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor
 import { OptionList } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
 import { IconInfo, IconPlus } from '@/components/ui/icons';
-import { Badge, Button, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, Input, NumberInput, PageLink, Refusal, RowActions, Segmented, Select, Skeleton, StaleRefusal, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, Input, NumberInput, PageLink, ReadFailed, Refusal, RowActions, Segmented, Select, Skeleton, StaleRefusal, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { messageOf, plural } from '@/lib/format';
 import { FEATURE_LABEL, FEATURE_NONE, featureAccountOptions, featureAccountValue, featureStandingLine, guardrailsChange, KEY_GROUPS, keyFeatureChoice, keyFeatureValue, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, type AutoModeOverride, type KeyForm, type KeyGroup } from '@/lib/forms';
@@ -507,7 +507,7 @@ function EffectiveList({ processed }: { processed: Loaded<KeyModels | null> }) {
       <span className="field__label">Effective list</span>
       <p className="field__hint">What the saved key is judged by, top to bottom, with the level each entry comes from.</p>
       {processed.error ? (
-        <p className="muted">Could not load the effective list: {processed.error}</p>
+        <ReadFailed name="effective list" error={processed.error} />
       ) : !rules ? (
         <Skeleton height={28} />
       ) : rules.length === 0 ? (

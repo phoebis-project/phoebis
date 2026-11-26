@@ -684,17 +684,12 @@ function AccountLink({ account, id }: { account: Account | null; id: string }) {
  * slow-down chip on a slowed pin, the shed mark, the account-bound badge, and the agents pinned on another account. A
  * dash with no account.
  */
-function RowAccount({ accent, account, others, session, speed }: { accent: boolean; account: Account | null; others: OtherPin[]; session: Session; speed: ReturnType<typeof memberSpeed> }) {
+function RowAccount({ accent, account, now, others, session }: { accent: boolean; account: Account | null; now: number; others: OtherPin[]; session: Session }) {
   if (session.accountId === null) return <span className="muted">-</span>;
   return (
-    <span className="srow__pin">
-      <AccountLink account={account} id={session.accountId} />
-      {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the chip. */}
-      {session.speed !== null && <SpeedChip {...speed} />}
-      <ShedBadge session={session} />
-      <BoundBadge bound={session.accountBound} />
+    <LineAccount account={account} bound={session.accountBound} className="srow__pin" id={session.accountId} now={now} row={session}>
       <OtherPins accent={accent} agents={others} lead="Agents on another account:" />
-    </span>
+    </LineAccount>
   );
 }
 
@@ -998,7 +993,7 @@ function SessionRows({
         )}
         {visible.has('account') && (
           <td className="col-fit">
-            <RowAccount accent={filtered.account && otherAccounts.some((l) => l.matched)} account={account} others={otherAccounts} session={session} speed={speed} />
+            <RowAccount accent={filtered.account && otherAccounts.some((l) => l.matched)} account={account} now={now} others={otherAccounts} session={session} />
           </td>
         )}
         {visible.has('requests') && (
@@ -1457,13 +1452,15 @@ function AgentLine({ line, now, requestsTo }: { line: SessionLine; now: number; 
  * holds. The account-bound badge reads the line's own pin on either account. An account the list lacks reads its id
  * alone.
  */
-function LineAccount({ account, bound, id, now, row }: { account: Account | null; bound: boolean | null; id: string; now: number; row: Session | null }) {
+function LineAccount({ account, bound, children, className = 'agents__account', id, now, row }: { account: Account | null; bound: boolean | null; children?: ReactNode; className?: string; id: string; now: number; row: Session | null }) {
   return (
-    <span className="agents__account">
+    <span className={className}>
       <AccountLink account={account} id={id} />
+      {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the chip. */}
       {row === null ? <SpeedChip {...memberSpeed({ speed: null }, account, now)} /> : row.speed !== null && <SpeedChip {...memberSpeed(row, account, now)} />}
       {row !== null && <ShedBadge session={row} />}
       <BoundBadge bound={bound} />
+      {children}
     </span>
   );
 }

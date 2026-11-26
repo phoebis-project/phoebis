@@ -30,7 +30,7 @@ import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, NumberInput, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, NumberInput, PageLink, ReadFailed, Refusal, Segmented, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS_CODEC, sortDirOf, type PoolsAddress } from '@/lib/address';
 import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, namedCostLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { regimeWord } from '@/lib/costs';
@@ -893,7 +893,7 @@ function ReturnRate({ buckets, error, loading, onRange, range }: ReturnRateProps
         </Select>
       </label>
       <p className="field__hint">Of the idle windows that reached each age in the last {range === '7d' ? 7 : 30} days, the ones whose next request continued the same prefix within it.</p>
-      {error !== null && <p className="muted">Could not load the return rate: {error}</p>}
+      {error !== null && <ReadFailed name="return rate" error={error} />}
       {loading ? (
         <Skeleton height={28} />
       ) : buckets.every((b) => b.reached === 0) ? (
@@ -2105,7 +2105,7 @@ export function PoolDialog({
                     current one alone and draws no count without it. */}
                 {pool !== null && pinsRead.current === null ? (
                   pinsRead.error !== null && !pinsRead.loading ? (
-                    <p className="muted">Could not load the pool's pins: {pinsRead.error}</p>
+                    <ReadFailed name="pool's pins" error={pinsRead.error} />
                   ) : (
                     <Skeleton height={28} />
                   )

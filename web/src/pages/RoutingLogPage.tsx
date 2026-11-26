@@ -19,7 +19,7 @@ import { addressWindow, ROUTING_LOG_CODEC, ROUTING_LOG_SORT_KEYS, sortDirOf } fr
 import { clock } from '@/lib/clock';
 import { tierOrder } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, readEnd, rowsRefreshTitle, shownCount, spanEnded } from '@/lib/follow';
+import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, readEnd, rowsRefreshTitle, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, plural, upperFirst } from '@/lib/format';
 import { toggled, useAsync, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
 import { byOf, catalogModel, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref, movedFrom, registryTarget, words } from '@/lib/routingLog';
@@ -89,7 +89,7 @@ export function RoutingLogPage() {
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
   // An open menu or popover under the bar stands over the list, so the poll waits for it to close.
-  const { error, fresh, goNext, nextCursor, overrun, rows, setFollowed, shownCursor } = useFollow<RoutingLogRow>({
+  const { count, error, fresh, goNext, nextCursor, overrun, rows, setFollowed } = useFollow<RoutingLogRow>({
     address,
     // Ascending is the stream reversed whole, as the read pages it, so a tie at one instant flips with the time.
     compare: dir === 'asc' ? (a, b) => compareRows(b, a) : compareRows,
@@ -151,7 +151,7 @@ export function RoutingLogPage() {
       <div className="routing-log stack">
         <FilterBar
           address={address}
-          count={shownCount(rows, shownCursor, log.data !== null)}
+          count={count}
           dimensions={dimensions}
           disabled={disabled}
           filters={filters}

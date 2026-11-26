@@ -1,6 +1,6 @@
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from 'react';
 import { clock } from '@/lib/clock';
-import { type Followed, followPages, merged, type Overrun, type Paging, pagingFor } from '@/lib/follow';
+import { type Followed, followPages, merged, type Overrun, type Paging, pagingFor, shownCount } from '@/lib/follow';
 import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded, useLatest } from '@/lib/hooks';
 
 /**
@@ -36,7 +36,7 @@ export function useFollow<R>(input: {
   paused: boolean;
   read: (cursor: string | undefined, to: number, landedAfter?: number) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>;
   stale: boolean;
-}): { error: string | null; fresh: Set<string>; goNext: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>>; shownCursor: string | null } {
+}): { count: string; error: string | null; fresh: Set<string>; goNext: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
   const { address, compare, cursor, error, fixedEnd, identity, intervalMs, list, next, paused, read, stale } = input;
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
   // The tint marks what the last poll brought, or after the tab's return what its read and the tick after it brought,
@@ -159,6 +159,7 @@ export function useFollow<R>(input: {
   const walk = overrun ?? standIn;
   // The count line says whether more rows stand behind the drawn ones, which the stored cursor says while stale too.
   const shownCursor = walk === null ? (list?.nextCursor ?? null) : walk.cursor;
+  const count = shownCount(rows, shownCursor, list !== null);
   // A stale list's cursor is another query's, so Next waits for this query's own.
   const nextCursor = walk === null && stale ? null : shownCursor;
   const goNext = () => {
@@ -167,7 +168,7 @@ export function useFollow<R>(input: {
     setFollowed((f) => f && { ...f, fresh: new Set() });
     next(nextCursor, walk?.to);
   };
-  return { error: standIn === null ? error : null, fresh, goNext, nextCursor, overrun, rows, setFollowed, shownCursor };
+  return { count, error: standIn === null ? error : null, fresh, goNext, nextCursor, overrun, rows, setFollowed };
 }
 
 /**
