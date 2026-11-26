@@ -7,6 +7,7 @@ use phoebis_bus::{
     user_agent_of, AccountSelected, Outcome, RequestComplete, RequestObserved, ResponseChunk,
     ResponseHead,
 };
+use phoebis_ledger::Speed;
 use phoebis_routing::{PinUsage, RegistrySnapshot};
 
 use crate::sessions::state::{SessionKey, SessionsState, AGENT_HELD, MAIN_AGENT};
@@ -73,7 +74,7 @@ impl WarmingState {
         now: i64,
     ) -> (Changes, Option<Arriving>) {
         let mut changes = Changes::default();
-        let warming = warming_ref(&self.agents, key, agent_id).expect(AGENT_HELD);
+        let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
         // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
         // unanswered probes a re-arming request's credit depends on. `reason` stays the recipe's gating
         // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held
@@ -96,9 +97,7 @@ impl WarmingState {
             recipe_hashes,
             model_matches,
         );
-        warming_mut(&mut self.agents, key, agent_id)
-            .expect(AGENT_HELD)
-            .last_guard = Some(verdict);
+        warming.last_guard = Some(verdict);
         // One touch for everything below: the lock is held to the end, so the flush reads the agent as this request
         // leaves it.
         changes.agent_row(key, agent_id);
@@ -120,6 +119,7 @@ impl WarmingState {
         // A turn or a second compaction moves the agent past the context an open compaction was reading, so that one
         // ends as a failed one and leaves the recipe to this request's own path.
         self.end_compaction(sessions, key, agent_id);
+        let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
         // A tick asks the router only about the models of retained recipes and of open compactions, so a probe an
         // agent keeps past its recipe's end can miss a resolution: the catalog's acknowledged resolution dates the held
         // probes' spellings here, the request's own pair first, before the credit compares its model with the
@@ -131,10 +131,7 @@ impl WarmingState {
                 observed.canonical_model.clone(),
             );
         }
-        for held in warming_ref(&self.agents, key, agent_id)
-            .expect(AGENT_HELD)
-            .held_models()
-        {
+        for held in warming.held_models() {
             if resolved.contains_key(held) {
                 continue;
             }
@@ -142,20 +139,17 @@ impl WarmingState {
                 resolved.insert(held.to_owned(), dated);
             }
         }
-        warming_mut(&mut self.agents, key, agent_id)
-            .expect(AGENT_HELD)
-            .follow_resolutions(&resolved);
+        warming.follow_resolutions(&resolved);
         if verdict == Guard::Compaction {
             // The recipe, its schedule and its probes wait as they stood, so a compaction that fails leaves the old
             // context the live one. Nothing of the turn's admission below runs: the idle window's prefix, the agent's
             // activity and model, and the agent cap all belong to the turn after it.
-            let warming = warming_ref(&self.agents, key, agent_id).expect(AGENT_HELD);
             let compaction = OpenCompaction {
                 request_id: observed.request_id.clone(),
                 received_at: observed.received_at,
                 started: now,
                 canonical_model: observed.canonical_model.clone(),
-                fast: observed.shape.speed.as_deref() == Some("fast"),
+                fast: Speed::of(observed.shape.speed.as_deref()) == Speed::Fast,
                 attempt: 0,
                 account: None,
                 funding: AttemptFunding::default(),
@@ -168,9 +162,7 @@ impl WarmingState {
                     user_agent: user_agent_of(&observed.headers),
                 },
             };
-            warming_mut(&mut self.agents, key, agent_id)
-                .expect(AGENT_HELD)
-                .compaction = Some(compaction);
+            warming.compaction = Some(compaction);
             self.compactions.insert(
                 observed.request_id.clone(),
                 (key.clone(), agent_id.to_string()),
@@ -180,9 +172,7 @@ impl WarmingState {
         // Apart from the recipe, which keepalive off, an opt-out or a refused body leaves unretained: the next idle
         // window judges a return against this request's prefix either way. A request without both hashes leaves none.
         if agent_id == MAIN_AGENT {
-            warming_mut(&mut self.agents, key, agent_id)
-                .expect(AGENT_HELD)
-                .last_prefix = observed
+            warming.last_prefix = observed
                 .static_hash
                 .clone()
                 .zip(observed.boundaries.last().cloned())
@@ -206,22 +196,15 @@ impl WarmingState {
         // ends the observation, and `set_aside` below ends it, or sets it aside, without one. It counts as the turn
         // that answered, or the gap this arrival's coverage reads would run from a turn before it. A compaction ends no
         // turn, so it returned above and leaves the open one to its own completion.
-        let missed = warming_ref(&self.agents, key, agent_id)
-            .expect(AGENT_HELD)
+        if warming
             .current
             .as_ref()
-            .filter(|observation| self.pending.contains_key(&observation.id))
-            .map(|observation| observation.started);
-        if let Some(started) = missed {
-            warming_mut(&mut self.agents, key, agent_id)
-                .expect(AGENT_HELD)
-                .last_answered_at = Some(started);
+            .is_some_and(|o| self.pending.contains_key(&o.id))
+        {
+            warming.answer_open_turn();
         }
         // Taken before anything below overwrites it and consumed with the observation.
-        let prior = prior_coverage(
-            warming_ref(&self.agents, key, agent_id).expect(AGENT_HELD),
-            now,
-        );
+        let prior = prior_coverage(warming, now);
         (changes, Some(Arriving { prior }))
     }
 
@@ -308,7 +291,6 @@ impl WarmingState {
         arriving: Arriving,
         poisoned: bool,
     ) -> Changes {
-        let mut changes = Changes::default();
         let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
         // The request restarts main's idle window at its own instant, which can be the instant of the prompt that set
         // the floor at the close, so the floor goes with it. A foreign request, an auxiliary one and one on an
@@ -331,24 +313,17 @@ impl WarmingState {
             .get(key)
             .is_some_and(|session| !session.cache_warming);
         if let Some(reason) = arrival_refusal.or(session_off.then_some(Reason::SessionOptedOut)) {
-            self.drop_aside(sessions, key, agent_id);
-            changes.append(self.set_reason(sessions, key, agent_id, reason));
-            return changes;
+            return self.arrival_refuse(sessions, key, agent_id, reason);
         }
         if self.pending.len() >= sessions.max_agents {
-            self.drop_aside(sessions, key, agent_id);
-            changes.append(self.set_reason(sessions, key, agent_id, Reason::RequestLimit));
-            return changes;
+            return self.arrival_refuse(sessions, key, agent_id, Reason::RequestLimit);
         }
         let built = prebuilt.unwrap_or_else(build);
         let mut recipe = match built {
             Ok(recipe) => recipe,
-            Err(reason) => {
-                self.drop_aside(sessions, key, agent_id);
-                changes.append(self.set_reason(sessions, key, agent_id, reason));
-                return changes;
-            }
+            Err(reason) => return self.arrival_refuse(sessions, key, agent_id, reason),
         };
+        let mut changes = Changes::default();
         // What the next observation's guard compares against: this request's own two hashes, not the ones a
         // prior arm happened to leave behind.
         recipe.static_hash = observed.static_hash.clone();
@@ -414,11 +389,11 @@ impl WarmingState {
         sessions: &SessionsState,
         request_id: &str,
     ) -> Option<&mut AgentWarming> {
-        let (key, agent_id) = self.compactions.get(request_id)?.clone();
-        if !sessions.live(&key, &agent_id) {
+        let (key, agent_id) = self.compactions.get(request_id)?;
+        if !sessions.live(key, agent_id) {
             return None;
         }
-        Some(warming_mut(&mut self.agents, &key, &agent_id).expect(AGENT_HELD)).filter(|warming| {
+        Some(warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD)).filter(|warming| {
             warming
                 .compaction
                 .as_ref()
@@ -462,12 +437,14 @@ impl WarmingState {
         if !sessions.live(key, agent_id) {
             return changes;
         }
+        let eligible = snapshot.account(&selected.account_id).is_some();
         let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
         let Some(observation) = warming.current.as_mut() else {
             return changes;
         };
         observation.attempt = selected.attempt;
-        observation.ready = false;
+        // A poisoned observation never becomes ready, so no evidence of this request can arm a schedule.
+        observation.ready = eligible && !observation.poisoned;
         observation.expected = 0;
         observation.ttl_ms = 0;
         observation.dispatched_ms = selected.cache_ttl_ms;
@@ -476,16 +453,12 @@ impl WarmingState {
         warming.expires = None;
         changes.append(self.set_reason(sessions, key, agent_id, Reason::AwaitingSelection));
         // The arrival reads the pool's policy and the key's opt-out, so a request refused by either never reaches here.
-        if snapshot.account(&selected.account_id).is_none() {
+        if !eligible {
             changes.append(self.set_reason(sessions, key, agent_id, Reason::IneligibleCredential));
             return changes;
         }
         let pool_id = snapshot.key(&key.0).map(|row| row.pool_id.clone());
         let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
-        if let Some(observation) = warming.current.as_mut() {
-            // A poisoned observation never becomes ready, so no evidence of this request can arm a schedule.
-            observation.ready = !observation.poisoned;
-        }
         if warming.account.as_deref() != Some(selected.account_id.as_str()) {
             warming.cold = 0;
             warming.ttl_ms = 0;
@@ -534,18 +507,22 @@ impl WarmingState {
             return changes;
         }
         let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
-        if let Some(observation) = warming.current.as_mut() {
-            if observation.attempt == head.attempt {
-                let moved = observation.funding.in_overage != in_overage;
-                observation.funding.in_overage = in_overage;
-                // A failed attempt is not evidence about the cache, and the next selection re-arms the attempt.
-                if !(200..300).contains(&head.status) {
-                    observation.ready = false;
-                    changes.agent_row(key, agent_id);
-                } else if moved {
-                    changes.agent_row(key, agent_id);
-                }
-            }
+        let Some(observation) = warming
+            .current
+            .as_mut()
+            .filter(|o| o.attempt == head.attempt)
+        else {
+            return changes;
+        };
+        let ok = (200..300).contains(&head.status);
+        let moved = observation.funding.in_overage != in_overage;
+        observation.funding.in_overage = in_overage;
+        // A failed attempt is not evidence about the cache, and the next selection re-arms the attempt.
+        if !ok {
+            observation.ready = false;
+        }
+        if !ok || moved {
+            changes.agent_row(key, agent_id);
         }
         changes
     }
@@ -747,26 +724,21 @@ impl WarmingState {
         // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
         let mut credit = {
             let warming = warming_ref(&self.agents, key, agent_id).expect(AGENT_HELD);
-            let fast = warming.current.as_ref().is_some_and(|o| o.recipe.fast);
-            warming
-                .current
-                .as_ref()
-                .and_then(|o| o.prior.as_ref())
-                .filter(|prior| {
-                    prior.credits(
+            warming.current.as_ref().and_then(|served| {
+                let prior = served.prior.as_ref()?;
+                let fast = served.recipe.fast;
+                prior
+                    .credits(
                         warming.last_real_at.unwrap_or(now),
                         &warming.canonical_model,
                         fast,
                         warming.account.as_deref(),
                         read,
                     )
-                })
-                .map(|_| {
-                    let served = warming.current.as_ref();
-                    Credit {
+                    .then(|| Credit {
                         // Its receipt picks the hour the credit files in and the revision its band and its saving
                         // price at, as its own request row's does, though the answer may land past either boundary.
-                        at: served.map_or(now, |o| o.received_at),
+                        at: served.received_at,
                         key: key.clone(),
                         key_generation: warming.key_generation,
                         pool_id: warming.pool_id.clone(),
@@ -776,20 +748,15 @@ impl WarmingState {
                         // Set below, once this request's own evidence has settled the TTL.
                         ttl_ms: 0,
                         fast,
-                        funding: served.map(|o| o.funding).unwrap_or_default(),
-                        client: RowClient {
-                            client: served.and_then(|o| o.client_label.clone()),
-                            user_agent: served.and_then(|o| user_agent_of(&o.recipe.headers)),
-                        },
-                    }
-                })
+                        funding: served.funding,
+                        client: served.row_client(),
+                    })
+            })
         };
         // Set once the credit has read its gap from the turn before, so the next request's gap runs from this one.
         if (200..300).contains(&complete.status) {
             if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) {
-                if let Some(request_started) = warming.current.as_ref().map(|o| o.started) {
-                    warming.last_answered_at = Some(request_started);
-                }
+                warming.answer_open_turn();
             }
         }
         changes.append(self.decide_unanswered(sessions, key, agent_id, read));
@@ -904,9 +871,7 @@ impl WarmingState {
             // missed one does at the next arrival.
             if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, &key, &agent_id)
             {
-                if let Some(started) = warming.current.as_ref().map(|o| o.started) {
-                    warming.last_answered_at = Some(started);
-                }
+                warming.answer_open_turn();
             }
             changes.append(self.end_observation(
                 sessions,

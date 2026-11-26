@@ -32,7 +32,7 @@ pub(crate) struct AttemptFunding {
 
 /// The client label and the user agent a keepalive row keys, as the relay observed them on the request the row
 /// describes. A saved charge flattens it, and a payload written before the pair rode the probe reads each as `None`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RowClient {
     #[serde(default)]
     pub client: Option<String>,

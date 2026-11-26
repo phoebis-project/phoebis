@@ -250,6 +250,17 @@ pub(crate) struct Observation {
     pub client_label: Option<String>,
 }
 
+impl Observation {
+    /// The client label and `user_agent_of` over the recipe's headers, the pair a row about this request or about a
+    /// probe that replays it keys.
+    pub(crate) fn row_client(&self) -> RowClient {
+        RowClient {
+            client: self.client_label.clone(),
+            user_agent: user_agent_of(&self.recipe.headers),
+        }
+    }
+}
+
 /// A main request whose chain held none of the anchor's boundaries at its arrival, kept until its completion.
 pub(crate) struct ChainMark {
     pub session: SessionKey,
@@ -339,10 +350,7 @@ impl Skipped {
             fast: observation.is_some_and(|o| o.recipe.fast),
             state,
             funding: observation.map(|o| o.funding).unwrap_or_default(),
-            client: RowClient {
-                client: observation.and_then(|o| o.client_label.clone()),
-                user_agent: observation.and_then(|o| user_agent_of(&o.recipe.headers)),
-            },
+            client: observation.map(Observation::row_client).unwrap_or_default(),
         }
     }
 }

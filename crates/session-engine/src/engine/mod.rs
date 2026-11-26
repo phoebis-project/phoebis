@@ -1210,15 +1210,15 @@ impl Engine {
     ) {
         let mut inner = self.lock();
         let inner = &mut *inner;
-        let changes = inner.warming.apply_probe(
-            &inner.sessions,
-            job,
-            exchange,
-            record,
-            covered_unit,
-            now,
-            inner.closed,
-        );
+        // A restart clears every recipe at once and wastes none of them, so the probe settles under no label.
+        if inner.closed {
+            inner.warming.release_probe_slot(&inner.sessions, job);
+            return;
+        }
+        let changes =
+            inner
+                .warming
+                .apply_probe(&inner.sessions, job, exchange, record, covered_unit, now);
         inner.apply_changes(changes);
     }
 }

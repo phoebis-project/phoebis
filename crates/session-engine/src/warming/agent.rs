@@ -218,6 +218,13 @@ impl AgentWarming {
         self.current.as_ref().is_some_and(|o| o.recipe.fast)
     }
 
+    /// Counts the open observation's turn as the last one that answered, so the next kept-warm gap runs from its start.
+    pub(crate) fn answer_open_turn(&mut self) {
+        if let Some(observation) = &self.current {
+            self.last_answered_at = Some(observation.started);
+        }
+    }
+
     /// The names `follow_resolutions` reads on an agent with no compaction open, as an arrival leaves it once
     /// `end_compaction` ran: the ones the arrival looks up in the catalog's acknowledged resolution.
     pub(crate) fn held_models(&self) -> BTreeSet<&str> {

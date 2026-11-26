@@ -54,9 +54,9 @@ pub(crate) struct ProbeJob {
     /// The agent's entrypoint at dispatch, which the probe's headers carry, so the probe settles under the regime it
     /// was sent with even when the agent observes another before it lands.
     pub entrypoint: Option<String>,
-    /// The observation's client label at dispatch, taken beside `entrypoint` for the same reason: the probe's own
-    /// request row keys the client of the headers it replays, and its settlement keys that client too.
-    pub client_label: Option<String>,
+    /// The observation's client label and user agent at dispatch, taken beside `entrypoint` for the same reason: the
+    /// probe's own request row keys the client of the headers it replays, and its settlement keys that client too.
+    pub client: RowClient,
     pub recipe: Recipe,
     pub expected: u64,
 }
@@ -349,11 +349,7 @@ pub(crate) fn probe_record(
             account: Some(job.holder.account_id.clone()),
             at,
             band: Band::Standard,
-            client: RowClient {
-                client: job.client_label.clone(),
-                // The read the ledger makes for the probe's own request row.
-                user_agent: phoebis_bus::user_agent_of(&job.recipe.headers),
-            },
+            client: job.client.clone(),
             funding: AttemptFunding::default(),
             tier: None,
             usage: ProbeUsage::default(),
@@ -387,6 +383,18 @@ pub(crate) fn probe_record(
     record
 }
 
+/// The TTL a served probe asked for, the one its body was dispatched with over the recipe's own, and the TTL its entry
+/// took as `usage` proves it over `previous_ms`, one reading for a probe the idle limit keeps and for one that lands.
+fn entry_ttl(
+    job: &ProbeJob,
+    result: &ProbeResult,
+    usage: &ProbeUsage,
+    previous_ms: i64,
+) -> (i64, i64) {
+    let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
+    (requested_ms, usage.ttl_ms(previous_ms, requested_ms))
+}
+
 impl WarmingState {
     /// The job of a due probe on the holder the gate admitted, read off the agent's two records, with the worker it
     /// reserves.
@@ -414,7 +422,7 @@ impl WarmingState {
             pool_id: warming.pool_id.clone(),
             canonical_model: warming.canonical_model.clone(),
             entrypoint: warming.entrypoint.clone(),
-            client_label: observation.client_label.clone(),
+            client: observation.row_client(),
             recipe: observation.recipe.clone(),
             expected: observation.expected,
         };
@@ -427,26 +435,9 @@ impl WarmingState {
         (changes, job)
     }
 
-    /// The fenced half, the Go `runProbe` after the call returned. The fence is the agent's incarnation and
-    /// generation and the observation's id and attempt; a result that fails it touches no recipe and settles
-    /// as one wasted probe under the stop that orphaned it, since the upstream served it either way. A held result
-    /// asked no account and settles under none, and a success the idle limit orphaned waits as a pending probe.
-    /// `closed` is the engine's quiesce, which no result passes.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn apply_probe(
-        &mut self,
-        sessions: &SessionsState,
-        job: &ProbeJob,
-        exchange: Exchange,
-        record: &ProbeRecord,
-        covered_unit: Option<SavingsUnit>,
-        now: i64,
-        closed: bool,
-    ) -> Changes {
-        let mut changes = Changes::default();
+    pub(crate) fn release_probe_slot(&mut self, sessions: &SessionsState, job: &ProbeJob) {
         let key = &job.key;
         let agent_id = job.agent_id.as_str();
-        let charge = record.charge.clone();
         // The worker slot comes back to the record the probe started on whatever the fence says. A result
         // orphaned on a record that is still alive, by a superseding request or by a discard, would otherwise
         // leave `in_flight` set, and `step` skips an agent that has a probe in flight for good.
@@ -456,6 +447,28 @@ impl WarmingState {
         {
             warming.in_flight = false;
         }
+    }
+
+    /// The fenced half, the Go `runProbe` after the call returned. The fence is the agent's incarnation and
+    /// generation and the observation's id and attempt; a result that fails it touches no recipe and settles
+    /// as one wasted probe under the stop that orphaned it, since the upstream served it either way. A held result
+    /// asked no account and settles under none, and a success the idle limit orphaned waits as a pending probe.
+    pub(crate) fn apply_probe(
+        &mut self,
+        sessions: &SessionsState,
+        job: &ProbeJob,
+        exchange: Exchange,
+        record: &ProbeRecord,
+        covered_unit: Option<SavingsUnit>,
+        now: i64,
+    ) -> Changes {
+        let mut changes = Changes::default();
+        let key = &job.key;
+        let agent_id = job.agent_id.as_str();
+        let charge = record.charge.clone();
+        self.release_probe_slot(sessions, job);
+        let on_incarnation = agent_ref(&sessions.entries, key, agent_id)
+            .is_some_and(|agent| agent.incarnation == job.incarnation);
         let fenced = agent_ref(&sessions.entries, key, agent_id).is_some_and(|agent| {
             agent.incarnation == job.incarnation
                 && agent.generation == job.generation
@@ -464,32 +477,20 @@ impl WarmingState {
                     .current
                     .as_ref()
                     .is_some_and(|o| o.id == job.observation_id && o.attempt == job.attempt)
-        }) && !closed
-            && sessions.live(key, agent_id);
+        }) && sessions.live(key, agent_id);
         if !fenced {
             // A record still on the incarnation the probe started on, carrying no stop label, was superseded by
             // a real request rather than stopped: the request the probe was paying for arrived, so the probe is
             // not wasted. A record that is gone leaves no label to read, so what removed it is what labels the
-            // probe: a restart clears every recipe at once and wastes none of them, a session that went is a
-            // session that ended, and anything else replaced the record.
-            let label = if closed {
-                None
+            // probe: a session that went is a session that ended, and anything else replaced the record.
+            let label = if on_incarnation {
+                warming_ref(&self.agents, key, agent_id)
+                    .expect(AGENT_HELD)
+                    .last_stop
+            } else if sessions.entries.contains_key(key) {
+                Some(Wasted::Replaced)
             } else {
-                match sessions.entries.get(key) {
-                    None => Some(Wasted::SessionEnded),
-                    Some(session) => match session
-                        .agents
-                        .get(agent_id)
-                        .filter(|agent| agent.incarnation == job.incarnation)
-                    {
-                        Some(_) => {
-                            warming_ref(&self.agents, key, agent_id)
-                                .expect(AGENT_HELD)
-                                .last_stop
-                        }
-                        None => Some(Wasted::Replaced),
-                    },
-                }
+                Some(Wasted::SessionEnded)
             };
             let Some(label) = label else {
                 return changes;
@@ -501,29 +502,24 @@ impl WarmingState {
             // still in flight at the ceiling joins them by the entry it wrote, computed as the landing computes it.
             if label == Wasted::IdleLimit && record.outcome == ProbeOutcome::Ok {
                 if let Exchange::Answered(result) = &exchange {
-                    if let Some(warming) = agent_ref(&sessions.entries, key, agent_id)
-                        .filter(|agent| agent.incarnation == job.incarnation)
-                        .map(|_| warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD))
-                    {
-                        let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
-                        let ttl = record.charge.usage.ttl_ms(warming.ttl_ms, requested_ms);
-                        warming.kept.push(Kept {
-                            key_generation: job.key_generation,
-                            pool_id: job.pool_id.clone(),
-                            canonical_model: job.canonical_model.clone(),
-                            charge,
-                            fast: job.recipe.fast,
-                            entry_expires: job.started + ttl,
-                            // The landing's coverage checks never ran on this path, so the probe earns no credit,
-                            // and a turn on its lineage that reads the cache leaves it unwasted.
-                            covered: false,
-                            unit: covered_unit,
-                            window: SEVEN_DAY,
-                            pending: Some(Wasted::IdleLimit),
-                        });
-                        changes.agent_row(key, agent_id);
-                        return changes;
-                    }
+                    let warming = warming_mut(&mut self.agents, key, agent_id).expect(AGENT_HELD);
+                    let (_, ttl) = entry_ttl(job, result, &record.charge.usage, warming.ttl_ms);
+                    warming.kept.push(Kept {
+                        key_generation: job.key_generation,
+                        pool_id: job.pool_id.clone(),
+                        canonical_model: job.canonical_model.clone(),
+                        charge,
+                        fast: job.recipe.fast,
+                        entry_expires: job.started + ttl,
+                        // The landing's coverage checks never ran on this path, so the probe earns no credit,
+                        // and a turn on its lineage that reads the cache leaves it unwasted.
+                        covered: false,
+                        unit: covered_unit,
+                        window: SEVEN_DAY,
+                        pending: Some(Wasted::IdleLimit),
+                    });
+                    changes.agent_row(key, agent_id);
+                    return changes;
                 }
             }
             self.settlements.push(Settlement {
@@ -563,8 +559,7 @@ impl WarmingState {
         // The end of the entry this probe wrote, computed once as the landing reads it, so a probe a check below
         // pauses still settles by its own entry.
         let previous_ms = warming.ttl_ms;
-        let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
-        let ttl = record.charge.usage.ttl_ms(previous_ms, requested_ms);
+        let (requested_ms, ttl) = entry_ttl(job, &result, &record.charge.usage, previous_ms);
         warming.unanswered.push(UnansweredProbe {
             id: result.request_id.clone().unwrap_or_default(),
             charge,
@@ -1004,7 +999,7 @@ mod tests {
             pool_id: "main".into(),
             canonical_model: "m".into(),
             entrypoint: None,
-            client_label: None,
+            client: RowClient::default(),
             recipe: Recipe {
                 body: Bytes::new(),
                 headers: Vec::new(),
@@ -1061,15 +1056,10 @@ mod tests {
                 2_000,
             );
             assert_eq!(record.outcome, ProbeOutcome::Held, "{orphaned_by}");
-            let changes = inner.warming.apply_probe(
-                &inner.sessions,
-                &job,
-                exchange,
-                &record,
-                None,
-                2_000,
-                inner.closed,
-            );
+            let changes =
+                inner
+                    .warming
+                    .apply_probe(&inner.sessions, &job, exchange, &record, None, 2_000);
             inner.apply_changes(changes);
             assert!(
                 inner.warming.settlements.is_empty(),
