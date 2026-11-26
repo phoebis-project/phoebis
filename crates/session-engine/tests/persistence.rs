@@ -1116,6 +1116,43 @@ async fn a_head_and_a_chunk_that_land_during_shutdown_are_refused_and_counted_an
 }
 
 #[tokio::test]
+async fn a_compaction_that_completes_during_shutdown_is_refused_and_counted_and_the_save_holds_the_armed_recipe(
+) {
+    let mut r = rig(RigSpec::default()).await;
+    let turn = r.observe("main").await;
+    r.engine.observe(r.observed_with(
+        "compaction",
+        "main",
+        Some("compaction"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    r.engine.quiesce();
+    // A succeeded compaction that landed would end the recipe under `compacted`.
+    r.engine
+        .observe(r.complete("compaction", Outcome::Succeeded, None));
+    r.engine.flush_persisted().await;
+    r.engine.close();
+
+    assert_eq!(
+        r.engine.stats().late_updates,
+        1,
+        "the compaction's completion is refused and counted"
+    );
+    assert_eq!(
+        (
+            saved_field(&r, "session", "main", "current")["id"].clone(),
+            saved_field(&r, "session", "main", "expires"),
+            saved_field(&r, "session", "main", "reason")
+        ),
+        (json!(turn), json!(1_300_000), json!("scheduled")),
+        "the saved recipe is the turn's, armed until its five-minute entry ends"
+    );
+}
+
+#[tokio::test]
 async fn a_probe_result_that_lands_during_shutdown_leaves_the_save_as_the_quiesce_left_it() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
