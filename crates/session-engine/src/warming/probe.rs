@@ -14,16 +14,16 @@ use phoebis_relay::{ProbeObstacle, RelayOutcome};
 use phoebis_routing::{seconds_ms, Holder, SEVEN_DAY};
 use serde_json::Value;
 
-use crate::breakeven::Ceilings;
 use crate::engine::{
     agent_mut, agent_ref, Agent, AgentState, Engine, Inner, Kept, ProbeCharge, Reason, SavingsUnit,
     SessionKey, UnansweredProbe, Verdict, Wasted, AGENT_HELD, MAIN_AGENT,
 };
-use crate::recipe::Recipe;
-use crate::savings::{
+use crate::warming::breakeven::Ceilings;
+use crate::warming::recipe::Recipe;
+use crate::warming::savings::{
     probe_cost, settlement_unit, typed, unpriced_reason, AttemptFunding, RowClient,
 };
-use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
+use crate::warming::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
 /// timeout bounds a body that stalls mid-way, and this bounds the whole thing so a worker slot never waits on
@@ -845,7 +845,7 @@ pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::config::{KeepaliveLimits, KeepaliveTiming};
+    use crate::engine::config::{KeepaliveLimits, KeepaliveTiming};
     use crate::engine::{Agent, Session};
     use phoebis_ledger::PriceRevisions;
 
@@ -1082,8 +1082,8 @@ mod tests {
             "the quota 429 retries rather than pausing"
         );
         assert_eq!(
-            crate::view::recipe_state(agent.reason, agent.paused),
-            crate::view::RecipeState::Held
+            crate::engine::view::recipe_state(agent.reason, agent.paused),
+            crate::engine::view::RecipeState::Held
         );
     }
 

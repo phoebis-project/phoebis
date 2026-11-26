@@ -10,7 +10,7 @@ use phoebis_routing::rules::{allows, process, RulesMode};
 use phoebis_routing::{listing::row_for, seconds_ms, LongContextRates, Rates};
 use phoebis_store::{canonical_id, ModelRule};
 
-use crate::config::{KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, ONE_HOUR_MS};
+use crate::engine::config::{KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, ONE_HOUR_MS};
 use crate::engine::Funding;
 
 /// The read and write factors of one model under one funding, any unit: only their ratio enters the break-even.

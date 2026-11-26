@@ -14,7 +14,7 @@ use axum::Router;
 use phoebis_relay::{authenticated_key, is_json, new_request_id, no_store_answer};
 
 use crate::engine::Engine;
-use crate::events::{decode_json_event, err, EventError};
+use crate::sessions::events::{decode_json_event, err, EventError};
 
 pub const EVENTS_PATH: &str = "/v0/companion/events";
 pub const MAX_BODY_BYTES: usize = 16 << 10;

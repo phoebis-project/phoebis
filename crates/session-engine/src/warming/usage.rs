@@ -4,7 +4,7 @@
 use phoebis_ledger::Speed;
 use serde_json::Value;
 
-use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
+use crate::engine::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
 
 pub const MAX_USAGE_BYTES: usize = 256 << 10;
 

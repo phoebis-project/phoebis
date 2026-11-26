@@ -2,6 +2,10 @@
 //! counters behind the views. One mutex, as the Go engine had, held for microseconds at a time. Nothing under
 //! it does I/O.
 
+pub(crate) mod config;
+pub(crate) mod persist;
+pub(crate) mod view;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,17 +26,17 @@ use phoebis_store::{AccountKind, AccountState, CooldownScope, OveragePolicy, Poo
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::breakeven::{resolve_or_shipped, CeilingInputs, Ceilings, FactorRows};
-use crate::config::{
+use crate::engine::config::{
     floor_ttl_ms, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
     ONE_HOUR_MS,
 };
-use crate::persist::Dirty;
-use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
-use crate::recipe::{make_recipe, Recipe};
-use crate::savings::{AttemptFunding, RowClient};
-use crate::usage::ProbeUsage;
-use crate::view::{recipe_state, RecipeState};
+use crate::engine::persist::Dirty;
+use crate::engine::view::{recipe_state, RecipeState};
+use crate::warming::breakeven::{resolve_or_shipped, CeilingInputs, Ceilings, FactorRows};
+use crate::warming::probe::{ceiling, run_job, wasted_label, ProbeJob};
+use crate::warming::recipe::{make_recipe, Recipe};
+use crate::warming::savings::{AttemptFunding, RowClient};
+use crate::warming::usage::ProbeUsage;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
 

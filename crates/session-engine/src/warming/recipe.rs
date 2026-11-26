@@ -5,7 +5,7 @@ use bytes::Bytes;
 use phoebis_cch::{Cut, Stamp};
 use serde_json::Value;
 
-use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
+use crate::engine::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
 use crate::engine::Reason;
 
 pub const MAX_HEADER_VALUE: usize = 8_192;

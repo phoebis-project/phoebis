@@ -9,7 +9,7 @@ use phoebis_store::AccountKind;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{Credit, Engine, SavingsUnit, SessionKey, Settlement, Skipped};
-use crate::usage::ProbeUsage;
+use crate::warming::usage::ProbeUsage;
 
 /// The serving attempt's funding as the credit and the probe price it: one `Copy` value the saved forms convert at
 /// `of` and `restore`, each saved form keeping its own members. The default is an attempt no account served yet.
@@ -180,7 +180,7 @@ impl Engine {
         );
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
-        if credit.ttl_ms == crate::config::ONE_HOUR_MS {
+        if credit.ttl_ms == crate::engine::config::ONE_HOUR_MS {
             d.kept_warm_1h_tokens = credit.read;
         } else {
             d.kept_warm_5m_tokens = credit.read;
