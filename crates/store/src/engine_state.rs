@@ -29,7 +29,7 @@ pub struct FactsKey {
 }
 
 /// One stored set to write: the value in clear, which the save seals, and the instant of its session's last report.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct FactsRow {
     pub key: FactsKey,
     pub record_version: u32,
@@ -116,7 +116,7 @@ pub struct IdleReturnsRow {
 /// agent takes its row of each, so a session or an agent the engine dropped leaves nothing behind for a load to
 /// restore. A removed session's stored sets of reported facts stay, since each leaves by a removal of its own, by the
 /// delete of the sets' key or by the retention pass's cut.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct EngineBatch {
     pub sessions: Vec<CompanionSessionRow>,
     /// `((key_id, key_generation, session_id), last_report_at)`: the instant of each session's last report, which the

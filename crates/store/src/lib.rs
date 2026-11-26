@@ -365,7 +365,7 @@ pub struct PurgedHistory {
 }
 
 /// What one cut of the stored facts removed.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PurgedFacts {
     pub agents: u64,
     pub sessions: u64,
