@@ -613,7 +613,7 @@ test('two pins of one session and one model are walked and marked apart, and a p
   // is 2, which main's 3 covers alone, and its mark leaves sub's 1 on hot, over the guard's tenth of 0.4.
   assert.equal(line([hot, cool], [pin('hot', 'r', 0.03, false), pin('hot', 'r', 0.01, false, { agentId: 'sub' })]), markedOne);
   // The subagent's pin is served warm and went cold a minute before the dialog's clock, so it walks cold beside t,
-  // the sums of case 1: its 3 covers the target of 2.5 and leaves t's 2 on hot.
+  // the sums of `markedOne`: its 3 covers the target of 2.5 and leaves t's 2 on hot.
   const cooled = pin('hot', 's', 0.03, true, { agentId: 'sub', warmUntil: at(NOW - MINUTE) });
   assert.equal(line([hot, cool], [pin('cool', 's', 0.01, false), cooled, second]), markedOne, 'a pin past its cold instant reads cold whatever it was served');
 });

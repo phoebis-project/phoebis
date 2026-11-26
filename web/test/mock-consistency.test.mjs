@@ -2434,8 +2434,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(read('req_2c7d9f15-b63/1', ['no_fit']), ['match', [['no_fit', 1]]]);
     // Nothing is left to narrow, so the step reads none with every count 0 or off.
     assert.deepEqual(read('req_51d0e2b8-7a0/1', ['spent', 'at_cap', 'no_fit', 'winding_down']), ['none', [['spent', 'off'], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]]);
-    // The story's four failovers by the rung of the ladder each reached: the long session's and the one from secondary
-    // keep primary, whose runway outlasts nightly's, and the two on nightly read least bad.
+    // Four of the story's failovers by the rung of the ladder each reached: the long session's and the one from
+    // secondary keep primary, whose runway outlasts nightly's, and the two on nightly read least bad.
     assert.deepEqual(
       ['req_1d9c3e55-0b2/2', 'req_2e7c90a1-6d4/2', 'req_4b0e9d17-c31/2', 'req_b8c3e9d4-e61/2'].map((id) => read(id, ['no_fit', 'ladder'])),
       [
@@ -2446,9 +2446,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       ],
     );
     // On the two least-bad landings nightly's row states the runway to 1.0 over the windows whose runway ends by their
-    // reset: the 5-hour one, which ends ahead of the reset at 18:11, where the 7-day one passes its reset. At its burn of
-    // 0.019 an hour and the prior's 0.01, (1 - 0.91 - 0.00015) / 0.029 is 3.09828 h, and (1 - 0.94 - 0.0038) / 0.029 is
-    // 1.93793 h.
+    // reset: the 5-hour one, which ends ahead of the reset at 18:11, where the 7-day one passes its reset. At its burn
+    // of 0.019 an hour and the prior's 0.01, (1 - 0.91 - 0.00015) / 0.029 is 3.09828 h, and (1 - 0.94 - 0.0038) / 0.029
+    // is 1.93793 h.
     const nightlyOn = (id) => records.find((r) => `${r.requestId}/${r.seq}` === id)?.candidates.find((c) => c.accountId === 'nightly');
     assert.deepEqual(['req_2e7c90a1-6d4/2', 'req_4b0e9d17-c31/2'].map((id) => [nightlyOn(id)?.runwayMs, nightlyOn(id)?.binding]), [[11_153_793, 'five_hour'], [6_976_552, 'five_hour']]);
 
@@ -2530,7 +2530,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     );
   });
 
-  test(`a placement's row of a member that holds no allowance reads spent with no runway and no window, at ${at}`, async () => {
+  test(`a placement's least-bad row of a member that holds no allowance reads spent with no runway and no window, at ${at}`, async () => {
     const records = await decisionsOf(await story);
     // On the main turn of 14:03:00, secondary's 5-hour window has read 1 since 14:02:11, so it holds no allowance for
     // the request. Its read over the ceiling is least bad, and the ladder refuses a member with no allowance that rung,
@@ -2855,7 +2855,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // 55,350 and 75,000 units, over the Pro tier's 90,000,000 on the week. The reservation round's 36,000 tokens at the
     // 5-minute write's 1.25 are 67,500 units on the desktop key, whose CLI client prices under the interactive regime's
     // Pro week of 112,500,000. The three pins the stretch round's pick compared and left unmarked, each on a 1-hour
-    // lane of the notebook key, whose client no regime names: 61,000 Haiku 4.5 tokens at its weight 1 and 52,000 and
+    // lane of the notebook key, which names no client: 61,000 Haiku 4.5 tokens at its weight 1 and 52,000 and
     // 69,000 Sonnet 5.5 tokens at 1.5, each at the 1-hour write's 1.25, are 76,250, 97,500 and 129,375 units over
     // 90,000,000.
     const storedRewrite = { 22_000: 0.00008, 88_000: 0.00031 };
@@ -2866,7 +2866,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       for (const p of e.detail.pins) {
         const where = `${e.requestId}: ${p.session_id}`;
         if (p.rewrite === null) {
-          // Each mark of the story holds a prompt size, so the router's record carries its rewrite.
+          // Each mark of the story found its destination this round and holds a prompt size on a model with a weight,
+          // so the router's record carries its rewrite.
           assert.deepEqual([p.marked, p.rewrite_window], [false, null], where);
           continue;
         }
@@ -4334,7 +4335,7 @@ test("a session's placements count no seeded creation of a pin that a subagent h
 // (req_b9b779ef-af6) comes 9 min 40 s behind its pin's last turn, past the five minutes its pin's line holds and inside
 // the hour that all's policy gives a plan account's main turn. Desktop's main turn on primary of 14:12:30
 // (req_6e1f3b98-a24) comes 46 s behind its pin's last turn.
-test("a turn reads its pin's entry past its lifetime by the pin's own TTL and counts, and a turn inside it counts nothing", async () => {
+test("a turn reads its pin's entry past its lifetime by the pin's own TTL and counts, and a turn inside it reads its entry alive", async () => {
   const s = await pinned;
   const factOf = async (id) => {
     const row = (await s.api.getRequest(id))?.request;
