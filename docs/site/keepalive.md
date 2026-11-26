@@ -593,12 +593,13 @@ with the Sessions view under [Sessions](console.md#sessions). The price table's 
 
 The engine writes its state to the registry every 30 seconds and at shutdown: the sessions, every agent with its state
 and its park, the retained recipes and the idle-age counters. The engine also starts a save right after a report of the
-companion mod that changes what the registry holds of a session's or an agent's reported facts, so those facts do not
-wait for the 30 seconds. Each settlement in that state names the window it was priced in, and a state an earlier build
-saved reads the 5-hour window for it. A recipe's prompt is sealed under the storage key, as the credentials are. A probe
-in flight is not saved. The shutdown stops taking reports and the events of requests in flight before its last save, so
-that save holds the state the engine had when it stopped, and a report that arrives later is answered `quiesced`. A save
-that fails is logged once and retried at every flush, and the engine keeps running from memory.
+companion mod that changes what the registry holds of a session's or an agent's reported facts, and right after a
+registration that turns the session's cache warming off, so those facts and the prompts that such a registration drops
+do not wait for the 30 seconds. Each settlement in that state names the window it was priced in, and a state an earlier
+build saved reads the 5-hour window for it. A recipe's prompt is sealed under the storage key, as the credentials are. A
+probe in flight is not saved. The shutdown stops taking reports and the events of requests in flight before its last
+save, so that save holds the state the engine had when it stopped, and a report that arrives later is answered
+`quiesced`. A save that fails is logged once and retried at every flush, and the engine keeps running from memory.
 
 At start the engine reads that state back before its first tick. Every session returns silent, its lease at zero and its
 sequence and its agents' generations kept. The mod's next heartbeat answers `instance_ended`, the mod registers the same

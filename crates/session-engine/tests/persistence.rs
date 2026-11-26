@@ -2794,6 +2794,40 @@ async fn a_restart_keeps_what_each_sessions_registration_said_of_its_cache_warmi
     );
 }
 
+/// A registration that turns the session's warming off drops the held prompt behind an answer that the mod takes as
+/// done. It asks for a save of its own even where its list names every kind and so files no leave: a crash ahead of
+/// the next periodic save would otherwise load the prompt back with the warming on.
+#[tokio::test]
+async fn a_registration_that_turns_the_warming_off_saves_the_drop_of_the_held_prompt() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    // The registry holds the prompt and the warming on, as a crash behind the registration would leave them.
+    r.engine.flush_persisted().await;
+    r.event(json!({"event": "session_start", "cache_warming": false}))
+        .await
+        .unwrap();
+    // The rig's two flushes and the one above stand ahead of it. The bound is the failure path alone: a passing run
+    // meets the registration's save at once.
+    tokio::time::timeout(Duration::from_secs(10), r.engine.persist_reached(4, 4))
+        .await
+        .expect("the registration asks for a save");
+    // The signal fires as the save reads its batch, so the case reads the registry for its landing and runs no save.
+    wait_for(Duration::from_secs(10), || {
+        saved_of(&r.h.store, "session", "main").filter(|saved| saved["current"].is_null())
+    })
+    .await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        (
+            second.sessions()[0].keepalive.cause,
+            second.recipes_for("desktop", "session")
+        ),
+        (Some(Reason::SessionOptedOut), Vec::<String>::new()),
+        "the load reads the session's option off and no prompt held"
+    );
+}
+
 #[tokio::test]
 async fn a_session_whose_main_agent_cannot_be_read_is_dropped_whole() {
     let mut r = rig(on_disk()).await;

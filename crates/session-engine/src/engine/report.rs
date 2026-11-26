@@ -15,11 +15,11 @@ use crate::sessions::events::{
 use crate::sessions::state::{agent_ref, AgentState, SessionKey, AGENT_HELD, MAIN_AGENT};
 use crate::warming::causes::{Reason, Wasted};
 
-/// An accepted report's answer, with whether the report filed a set of facts or the leave of a kind, which asks for a
-/// save at once.
+/// An accepted report's answer, with whether the report asks for a save at once: it filed a set of facts or the leave
+/// of a kind, or it turned the session's cache warming off.
 pub(crate) struct Applied {
     pub ack: Ack,
-    pub filed_facts: bool,
+    pub asks_save: bool,
 }
 
 impl Engine {
@@ -71,7 +71,7 @@ impl Engine {
         }
         self.flush();
         let applied = acked?;
-        if applied.filed_facts {
+        if applied.asks_save {
             // Not awaited: the answer goes out at once, and the one save worker takes the request from here.
             self.save_soon();
         }
@@ -153,7 +153,7 @@ impl Inner {
                 self.touch_session(&key);
                 return Ok(Applied {
                     ack: self.sessions.acknowledge(&key, None),
-                    filed_facts: false,
+                    asks_save: false,
                 });
             }
             Reported::AgentStart {
@@ -282,7 +282,7 @@ impl Inner {
         }
         Ok(Applied {
             ack: self.sessions.acknowledge(&key, report.event.agent_id()),
-            filed_facts,
+            asks_save: filed_facts,
         })
     }
 
@@ -343,7 +343,8 @@ impl Inner {
             self.touch_session(&key);
             return Ok(Applied {
                 ack: self.sessions.acknowledge_start(&key),
-                filed_facts,
+                // A crash ahead of the periodic save would load the dropped prompts back with the warming on.
+                asks_save: filed_facts || started.warming_turned_off,
             });
         }
         if kind == StartKind::Replacement {
@@ -369,7 +370,7 @@ impl Inner {
         self.warm(|w, s| w.admit(s, &key, MAIN_AGENT, now));
         Ok(Applied {
             ack: self.sessions.acknowledge_start(&key),
-            filed_facts: true,
+            asks_save: true,
         })
     }
 }
