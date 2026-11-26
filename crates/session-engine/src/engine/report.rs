@@ -280,10 +280,8 @@ impl Inner {
             Reported::Parked { .. } | Reported::State { .. }
         ) && agent_id == MAIN_AGENT
         {
-            let changes = self
-                .warming
+            self.warming
                 .open_idle_window(&self.sessions, &key, snapshot);
-            self.apply_changes(changes);
         }
         Ok(Applied {
             ack: self

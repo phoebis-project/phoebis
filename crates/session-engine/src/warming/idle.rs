@@ -344,12 +344,11 @@ impl WarmingState {
         sessions: &SessionsState,
         key: &SessionKey,
         snapshot: &RegistrySnapshot,
-    ) -> Changes {
+    ) {
         if let Some(main) = agent_ref(&sessions.entries, key, MAIN_AGENT) {
             let warming = warming_mut(&mut self.agents, key, MAIN_AGENT).expect(AGENT_HELD);
             open_idle_episode(main, warming, snapshot);
         }
-        Changes::default()
     }
 
     /// A lease that lapsed: the lapse is counted once for each agent of the session, and main's window closes.

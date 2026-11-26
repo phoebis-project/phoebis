@@ -402,22 +402,20 @@ impl SessionsState {
         self.entries.clear();
     }
 
-    /// Moves the agent to `state` and answers the state it left. A move from parked to idle stamps the park's end,
-    /// where the idle window restarts.
+    /// Moves the agent to `state`. A move from parked to idle stamps the park's end, where the idle window restarts.
     pub(crate) fn set_state(
         &mut self,
         key: &SessionKey,
         agent_id: &str,
         state: AgentState,
         now: i64,
-    ) -> AgentState {
+    ) {
         let agent = agent_mut(&mut self.entries, key, agent_id).expect(AGENT_HELD);
         let was = agent.state;
         if was == AgentState::Parked && state == AgentState::Idle {
             agent.park_ended_at = Some(now);
         }
         agent.set_state(state);
-        was
     }
 
     pub(crate) fn end_session(&mut self, key: &SessionKey, sequence: u64, now: i64) {
