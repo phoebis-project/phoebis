@@ -196,7 +196,9 @@ The first missing item in the table's order names the refusal. A token count and
 for the version and the session header, the two items their headers carry, and outside the five others.
 
 The other headers stay optional: the agent type, the context-compacted mark, the parent agent id, the prompt-id header,
-the tool durations and `x-client-request-id`. A request without one is relayed the same way.
+the tool durations and `x-client-request-id`. A request without one is relayed the same way. An agent id and a parent
+agent id may hold an `@` beside the ASCII letters, digits and `-./:_` of a session id, since a teammate of an agent team
+names itself by its name, an `@` and its team.
 
 `CLAUDE_CODE_ATTRIBUTION_HEADER=0` meets the refusal, since the line is required where `system` is an array. The quota
 probe (no `system`) is outside the line's item alone, and a client outside the Claude Code class is refused `403`

@@ -51,7 +51,9 @@ pub use errors::{
     BODY_OVER_BUDGET, CLIENT_GONE_CODE, ERROR_CODE_HEADER, LEDGER_BEHIND,
 };
 pub use hold::INSPECT_BUFFER;
-pub use identity::{identifier_byte, is_filed_word, is_valid_id, MAX_FILED_WORD_LEN};
+pub use identity::{
+    identifier_byte, is_filed_word, is_valid_agent_id, is_valid_id, MAX_FILED_WORD_LEN,
+};
 pub use memory::{MemoryKey, MEMORY_CAP, MEMORY_IDLE_MS};
 pub use messages::{
     new_request_id, router, Accounting, AccountingSource, Limits, Probe, ProbeObstacle, Relay,

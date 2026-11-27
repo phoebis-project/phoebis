@@ -1082,6 +1082,19 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
 }
 
 #[tokio::test]
+async fn an_agent_id_takes_an_at_sign_and_a_previous_instance_id_does_not() {
+    let mut r = rig(RigSpec::default()).await;
+    agent_start(&mut r, "twin@session-22222222", None)
+        .await
+        .expect("a teammate's start is taken");
+    let refused = r
+        .event(json!({"event": "session_start", "previous_instance_id": "instance@1"}))
+        .await
+        .expect_err("a previous instance id with an at sign is refused");
+    assert_eq!(refused.code, "invalid_identity");
+}
+
+#[tokio::test]
 async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_else() {
     let mut r = rig(RigSpec::default()).await;
     let app = events_router(r.engine.clone());

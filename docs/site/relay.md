@@ -557,7 +557,7 @@ without a registration. The eighteen codes, by status:
 | Code | Status | When |
 | --- | --- | --- |
 | `invalid_event` | 400 | The body is not typed `application/json`, is not this protocol's JSON, names no `protocol`, names one that is no unsigned integer or names a member twice, carries a field its event does not take (such as a `title` on a `heartbeat`, whatever its value) or lacks one it requires, names a kind in `reported_facts` that is none of the three, carries a park field on a state other than `parked`, reports `parked` without `park_kind` or, outside `background`, without `wake_at`, or carries a `wake_at` on a `background` park or a `deadline` on a `scheduled` park |
-| `invalid_identity` | 400 | `session_id`, `instance_id`, `agent_id` or `previous_instance_id` is not a valid id, or `sequence` is 0 |
+| `invalid_identity` | 400 | `session_id`, `instance_id`, `agent_id` or `previous_instance_id` is not a valid id, or `sequence` is 0. An `agent_id` may also hold an `@`, since a teammate of an agent team names itself `<name>@<team>` |
 | `invalid_state` | 400 | `kind` is neither `prompt` nor `presence`, `state` is none of the five, or `park_kind` is none of the three |
 | `unknown_event` | 400 | `event` is none of the eight |
 | `unsupported_protocol` | 400 | `protocol` is an unsigned integer other than `1` |

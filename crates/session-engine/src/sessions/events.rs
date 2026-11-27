@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use phoebis_relay::is_valid_id as valid_id;
+use phoebis_relay::{is_valid_agent_id, is_valid_id as valid_id};
 use phoebis_store::FactsKind;
 
 use crate::sessions::config::LEASE_MS;
@@ -502,7 +502,7 @@ fn validate(event: Event) -> Result<Event, EventError> {
     if !valid_id(&event.session_id)
         || !valid_id(&event.instance_id)
         || event.sequence == 0
-        || !optional_ok(&event.agent_id)
+        || !event.agent_id.as_deref().is_none_or(is_valid_agent_id)
         || !optional_ok(&event.previous_instance_id)
     {
         return Err(err("invalid_identity", 400));

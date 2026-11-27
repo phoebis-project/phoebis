@@ -91,9 +91,9 @@ pub fn identify(
     let session_id = header_id(headers, "x-claude-code-session-id");
     Ok(RequestIdentity {
         session_id,
-        agent_id: header_id(headers, "x-claude-code-agent-id")
+        agent_id: agent_header_id(headers, "x-claude-code-agent-id")
             .unwrap_or_else(|| MAIN_AGENT.to_string()),
-        parent_agent_id: header_id(headers, "x-claude-code-parent-agent-id"),
+        parent_agent_id: agent_header_id(headers, "x-claude-code-parent-agent-id"),
         instance_id: header_id(headers, phoebis_bus::INSTANCE_ID_HEADER),
         model,
         canonical_model: folded_model.clone(),
@@ -248,7 +248,7 @@ pub(crate) fn contract_gap(
         return Some(ITEM_METADATA_USER_ID);
     }
     if matches!(class, "subagent" | "workflow")
-        && header_id(headers, "x-claude-code-agent-id").is_none()
+        && agent_header_id(headers, "x-claude-code-agent-id").is_none()
     {
         return Some(ITEM_AGENT_ID_HEADER);
     }
@@ -265,7 +265,7 @@ pub(crate) fn restores_prev_req(request_class: Option<&str>, headers: &HeaderMap
     match request_class {
         Some("main" | "subagent" | "workflow" | "compaction") => true,
         Some("auxiliary") => {
-            header_id(headers, "x-claude-code-agent-id").is_some()
+            agent_header_id(headers, "x-claude-code-agent-id").is_some()
                 || crate::facts::header_prompt_id(headers).is_some()
         }
         _ => false,
@@ -328,6 +328,12 @@ pub fn is_valid_id(value: &str) -> bool {
     bounded_token(value, identifier_byte)
 }
 
+/// `is_valid_id` with the at sign as well: a teammate of an agent team names itself `<name>@<team>`. No other
+/// identifier takes the at sign, since a key selector splits `<key id>@<generation>` at it.
+pub fn is_valid_agent_id(value: &str) -> bool {
+    bounded_token(value, |b| identifier_byte(b) || b == b'@')
+}
+
 /// Whether `value` is a word the relay files as the upstream sent it: one to `MAX_FILED_WORD_LEN` bytes, each an
 /// `identifier_byte`. A word that fails reads `other` in a key, and it files `upstream_<status>` as a forwarded
 /// failure's code and `error` as the code of a stream's `error` event.
@@ -339,14 +345,22 @@ pub(crate) fn bounded_token(value: &str, allowed: impl Fn(u8) -> bool) -> bool {
     (1..=MAX_ID_LEN).contains(&value.len()) && value.bytes().all(allowed)
 }
 
+pub(crate) fn header_id(headers: &HeaderMap, name: &str) -> Option<String> {
+    header_id_under(headers, name, is_valid_id)
+}
+
+pub(crate) fn agent_header_id(headers: &HeaderMap, name: &str) -> Option<String> {
+    header_id_under(headers, name, is_valid_agent_id)
+}
+
 /// A malformed identifier is treated as absent: it is a label, never an authorization decision, so a caller
 /// cannot gain anything by sending one the relay would otherwise have to reject the whole request over.
-pub(crate) fn header_id(headers: &HeaderMap, name: &str) -> Option<String> {
+fn header_id_under(headers: &HeaderMap, name: &str, valid: fn(&str) -> bool) -> Option<String> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
-        .filter(|value| is_valid_id(value))
+        .filter(|value| valid(value))
         .map(str::to_string)
 }
 
@@ -746,8 +760,40 @@ mod tests {
     }
 
     #[test]
+    fn a_teammates_id_with_an_at_sign_reads_at_each_agent_id_header() {
+        let teammate = "twin@session-22222222";
+        let mut headers = contract_headers(Some("subagent"));
+        headers.insert("x-claude-code-agent-id", teammate.parse().unwrap());
+        assert_eq!(gap(&headers, &whole_body()), None, "the contract");
+        let identity = identify(&headers, &TopLevelMembers::read(BODY), client_of(&headers))
+            .expect("the body has a model");
+        assert_eq!(identity.agent_id, teammate, "the agent");
+        assert!(
+            restores_prev_req(Some("auxiliary"), &headers),
+            "an auxiliary fork"
+        );
+        let mut subagent = HeaderMap::new();
+        subagent.insert("x-claude-code-parent-agent-id", teammate.parse().unwrap());
+        let identity = identify(
+            &subagent,
+            &TopLevelMembers::read(BODY),
+            client_of(&subagent),
+        )
+        .expect("the body has a model");
+        assert_eq!(
+            identity.parent_agent_id.as_deref(),
+            Some(teammate),
+            "the parent"
+        );
+    }
+
+    #[test]
     fn contract_gap_reads_a_malformed_session_header_as_absent() {
-        for malformed in ["bad id!".to_string(), "s".repeat(MAX_ID_LEN + 1)] {
+        for malformed in [
+            "bad id!".to_string(),
+            "s".repeat(MAX_ID_LEN + 1),
+            "twin@session-22222222".to_string(),
+        ] {
             let mut headers = contract_headers(Some("main"));
             headers.insert("x-claude-code-session-id", malformed.parse().unwrap());
             assert_eq!(
