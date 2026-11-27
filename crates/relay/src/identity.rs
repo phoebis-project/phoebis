@@ -316,14 +316,15 @@ fn is_valid_model(value: &str) -> bool {
     bounded_token(value, |b| identifier_byte(b) || matches!(b, b'[' | b']'))
 }
 
-/// The bytes an identifier read off a header may hold: ASCII letters and digits and `-`, `.`, `/`, `:`, `_`.
+/// The bytes an identifier read off a header may hold, apart from an agent id's `@`: ASCII letters and digits and `-`,
+/// `.`, `/`, `:`, `_`.
 pub fn identifier_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/' | b':' | b'_')
 }
 
-/// Whether `value` is an identifier the relay reads off a header: at least one byte and at most `MAX_ID_LEN`, each an
-/// `identifier_byte`. The keepalive checks the ids a companion reports through it, so a report and a request name one
-/// session alike.
+/// Whether `value` is an identifier the relay reads off a header other than an agent id: at least one byte and at most
+/// `MAX_ID_LEN`, each an `identifier_byte`. The keepalive checks the session and instance ids a companion reports
+/// through it, so a report and a request name one session alike.
 pub fn is_valid_id(value: &str) -> bool {
     bounded_token(value, identifier_byte)
 }
@@ -349,7 +350,7 @@ pub(crate) fn header_id(headers: &HeaderMap, name: &str) -> Option<String> {
     header_id_under(headers, name, is_valid_id)
 }
 
-pub(crate) fn agent_header_id(headers: &HeaderMap, name: &str) -> Option<String> {
+fn agent_header_id(headers: &HeaderMap, name: &str) -> Option<String> {
     header_id_under(headers, name, is_valid_agent_id)
 }
 
