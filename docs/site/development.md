@@ -558,10 +558,9 @@ and starts the `Deploy` workflow of `phoebis-docs`.
 The two jobs that reach another repository each use a token of a GitHub App, under a credential of their own. The build
 reads the four repositories, and the `Documentation` runs of the companion and the proxy, with the read credential: the
 organization holds its client id as the variable `DOCS_APP_CLIENT_ID` and its private key as the secret
-`DOCS_APP_PRIVATE_KEY`, each open to the four. Where either is not set, the build uses the job's own token, which reads
-no other private repository. A pull request from a fork gets no secret and builds on that path, so its `site` job passes
-only once each of the four repositories is public. `start-deploy` writes to the Actions of `phoebis-docs` with the start
-credential. The organization holds its client id as the variable `DOCS_DEPLOY_APP_CLIENT_ID`, and each product
+`DOCS_APP_PRIVATE_KEY`, each open to the four. Where either is not set, the build uses the job's own token. A pull
+request from a fork gets no secret and builds on that path. `start-deploy` writes to the Actions of `phoebis-docs` with
+the start credential. The organization holds its client id as the variable `DOCS_DEPLOY_APP_CLIENT_ID`, and each product
 repository holds its private key as the secret `DOCS_DEPLOY_APP_PRIVATE_KEY` of the environment `docs-deploy`. That
 environment allows `main` alone, so a workflow on another branch gets no key. The job runs in the organization's
 repository alone, so a fork's own `main` starts nothing. Where a half of the start credential is not set, the job fails
@@ -635,8 +634,8 @@ deleted with its tag and created again at the corrected commit behind a green dr
 image tag and no archive under the version. Once an image tag or an archive is public, the correction ships as the next
 patch version. A manual dispatch (Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the
 smoke checks without pushing. Run it on `main` after a change to one of the image's or the binary's inputs, since a pull
-request builds the amd64 side alone, and ahead of each release. The package inherits the repository's visibility: while
-the repository is private, pulling needs a token with `read:packages`. The image name is derived from the repository
-that runs the workflow, so a renamed repository publishes under its new name without a workflow change. A change that an
-operator sees writes its entry under `## Unreleased`, the first section of the [changelog](changelog.md), and step 2
-renames that heading to the version.
+request builds the amd64 side alone, and ahead of each release. The package is public, so a pull needs no login, and
+GitHub does not let a public package become private again. The image name is derived from the repository that runs the
+workflow, so a renamed repository publishes under its new name without a workflow change. A change that an operator sees
+writes its entry under `## Unreleased`, the first section of the [changelog](changelog.md), and step 2 renames that
+heading to the version.

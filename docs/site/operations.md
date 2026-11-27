@@ -592,7 +592,6 @@ Publishing this site is on [Development](development.md#publishing-the-site).
 
 <a id="releasing"></a>
 
-Releasing the container image and the static binaries, and the `read:packages` token a private package needs, are on
-[Development](development.md#releasing).
+Releasing the container image and the static binaries is on [Development](development.md#releasing).
 
 The license is on [the Overview](index.md#license).

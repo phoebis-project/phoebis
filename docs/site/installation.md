@@ -23,12 +23,7 @@ The archive is `phoebis-<version>-<target>.tar.gz` for the two targets `x86_64-u
 `aarch64-unknown-linux-musl`, and it holds `phoebis-<version>-<target>/phoebis` and `LICENSE`. `SHA256SUMS` is the one
 checksum file and lists both archives, so `--ignore-missing` checks the one you downloaded.
 
-While the repository is private, downloading a release asset needs a token with `repo` scope, as
-[Releasing](development.md#releasing) says of `read:packages` for the image. GitHub answers the `curl -LO` lines above
-with `404` while the repository is private, token or not, so fetch the archive and `SHA256SUMS` in their place with the
-GitHub CLI: `GH_TOKEN=<token> gh release download <version> --repo phoebis-project/phoebis --pattern
-'phoebis-<version>-x86_64-unknown-linux-musl.tar.gz' --pattern SHA256SUMS`. An operator who builds from source follows
-[Build](#build) instead.
+An operator who builds from source follows [Build](#build) instead.
 
 ## Build
 
@@ -215,8 +210,7 @@ The named volume `phoebis-data` takes the image's ownership and mode of `/var/li
 bind mount from an earlier image keeps the mode it has, and the router warns at each start until it is set to `0700`,
 from the host or from a one-off container that mounts it. A price table dropped at `/var/lib/phoebis/api_prices.yaml` on
 the volume is read at the next start, as `stats.api_prices_path` in the container configuration names it, and a
-subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` the same. Pulling the image needs
-`docker login ghcr.io` with a token carrying `read:packages` while the repository is private. Upgrading is on
+subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` the same. Upgrading is on
 [Operations](operations.md#upgrades).
 
 ## Commands
