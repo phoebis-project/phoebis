@@ -604,8 +604,12 @@ release build with the next dry run or release, and `Tests` covers it until then
    it for a release with no moved pin too. Then create the release on GitHub with the tag `X.Y.Z`, no `v` prefix, at the
    commit that the dry run proved, with the version as its title and a link to the changelog page in its notes. Create
    the release of a version with a suffix as a prerelease. Publishing it starts the workflow.
-4. The workflow's guard refuses the release before anything builds when the tag has another form
-   (`release tag '{TAG}' is not X.Y.Z or X.Y.Z-suffix`), differs from the workspace version
+4. On each event the workflow's guard refuses a workspace version that is not `X.Y.Z` or `X.Y.Z-suffix`
+   (`Cargo.toml states a workspace version that is not X.Y.Z or X.Y.Z-suffix`). On a pull request and on a dry run it
+   refuses a changelog with no section for that version
+   (`docs/site/changelog.md has no '## {version}' section for the workspace version`), so the dry run of step 3 shows a
+   missed heading before the release exists. On a release it refuses the release before anything builds when the tag has
+   another form (`release tag '{TAG}' is not X.Y.Z or X.Y.Z-suffix`), differs from the workspace version
    (`release tag '{TAG}' differs from the workspace version '{version}' in Cargo.toml`), or has no section in the
    changelog (`docs/site/changelog.md has no '## {TAG}' section for this release`). Otherwise it builds `linux/amd64`
    and `linux/arm64` on native runners and pushes each by digest, runs the arm64 image through `--version` on its own
@@ -629,13 +633,13 @@ release build with the next dry run or release, and `Tests` covers it until then
    `FROM` line.
 
 A failed smoke, of the image or of a binary, or a failed bundle check leaves untagged digests in the registry, no tag
-and no archive on the release. A failed guard leaves nothing. A release whose run fails for a reason in its commit is
-deleted with its tag and created again at the corrected commit behind a green dry run, as long as the run published no
-image tag and no archive under the version. Once an image tag or an archive is public, the correction ships as the next
-patch version. A manual dispatch (Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the
-smoke checks without pushing. Run it on `main` after a change to one of the image's or the binary's inputs, since a pull
-request builds the amd64 side alone, and ahead of each release. The package is public, so a pull needs no login, and
-GitHub does not let a public package become private again. The image name is derived from the repository that runs the
-workflow, so a renamed repository publishes under its new name without a workflow change. A change that an operator sees
-writes its entry under `## Unreleased`, the first section of the [changelog](changelog.md), and step 2 renames that
-heading to the version.
+and no archive on the release. A failed guard builds nothing and pushes nothing, and on a release the published release
+and its tag exist when the guard fails. A release whose run fails for a reason in its commit is deleted with its tag and
+created again at the corrected commit behind a green dry run, as long as the run published no image tag and no archive
+under the version. Once an image tag or an archive is public, the correction ships as the next patch version. A manual
+dispatch (Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the smoke checks without
+pushing. Run it on `main` after a change to one of the image's or the binary's inputs, since a pull request builds the
+amd64 side alone, and ahead of each release. The package is public, so a pull needs no login, and GitHub does not let a
+public package become private again. The image name is derived from the repository that runs the workflow, so a renamed
+repository publishes under its new name without a workflow change. A change that an operator sees writes its entry under
+`## Unreleased`, the first section of the [changelog](changelog.md), and step 2 renames that heading to the version.
