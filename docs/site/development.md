@@ -629,11 +629,12 @@ release build with the next dry run or release, and `Tests` covers it until then
    console embedded as built), runs each on its own platform (`--version`, a static link check, an embedded bundle,
    `init --non-interactive` and `check-config` in a temporary directory) and packs it with the license as
    `phoebis-{VERSION}-{TARGET}.tar.gz`. The `cross` images install clang, cmake and libclang without tzdata's time zone
-   prompt, so the build runs through rather than waiting for an answer. Once every smoke passes it publishes one
-   manifest list at `ghcr.io/phoebis-project/phoebis` under `X.Y.Z`, `X.Y`, `X` (from major 1), `latest` and
-   `sha-<short sha>`, with none of `X.Y`, `X` and `latest` for a prerelease, checks that the list holds amd64 and arm64,
-   and uploads the two archives with `SHA256SUMS` to the release. The Dockerfile pins the image's node stage and its
-   runtime base by digest, each with its tag and the day it was resolved in the comment above its `FROM` line.
+   prompt, so the build runs through rather than waiting for an answer. Once every smoke passes it checks that the
+   version's own tag is among the tags to write and that the pushed digests make a manifest list with amd64 and arm64,
+   and it writes no tag where either check fails. It then publishes that list at `ghcr.io/phoebis-project/phoebis` under
+   `X.Y.Z`, `X.Y`, `X` (from major 1), `latest` and `sha-<short sha>`, with none of `X.Y`, `X` and `latest` for a
+   prerelease, and uploads the two archives with `SHA256SUMS` to the release. The Dockerfile pins the image's node stage
+   and its runtime base by digest, each with its tag and the day it was resolved in the comment above its `FROM` line.
 
 A failed smoke, of the image or of a binary, or a failed bundle check leaves untagged digests in the registry, no tag
 and no archive on the release. A failed guard builds nothing and pushes nothing, and on a release the published release
