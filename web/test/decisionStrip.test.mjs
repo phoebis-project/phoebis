@@ -988,6 +988,17 @@ test("the pin's three groups hold their keys and the fired shed line reads its t
   ]);
 });
 
+test("a mark links its member's whole session id and a skipped pin whose text splits past four parts links nowhere", async () => {
+  // A session id can hold a `/`, so the pin key's text alone does not say where the session ends.
+  const base = await recordOf('req_1eaa9bc1-a18/1');
+  const walk = base.walk.map((s) => (s.step === 'move:shed' ? { ...s, facts: [...s.facts.filter((f) => f.key !== 'marks' && f.key !== 'skipped'), fact('marks', ['desktop/work/17/main/m']), fact('skipped', ['desktop/work/17/main/m: no_runway'])] } : s));
+  const record = { ...base, outcome: { ...base.outcome, shedMarks: [{ agentId: 'main', keyId: 'desktop', model: 'm', sessionId: 'work/17' }] }, walk };
+  const round = stationPlan(record, 'move:shed').block.groups.find((g) => g.label === 'Round').rows;
+  const chipsOf = (label) => round.find((r) => r.label === label).chips.map((c) => [c.value, c.href]);
+  assert.deepEqual(chipsOf('marks'), [['work/17/main', '/sessions?finished=1&session=work%2F17']]);
+  assert.deepEqual(chipsOf('skipped'), [['work/17/main/m: no runway', undefined]]);
+});
+
 test("a held 5-hour window's age and its hold read as durations in the Round group after the wait", async () => {
   // The line the router writes while the 5-hour window is younger than its hold and its stamp still waits.
   const base = await recordOf('req_868264bc-611/1');

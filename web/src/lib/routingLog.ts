@@ -1163,20 +1163,33 @@ function obstacleChip(text: string, record: DecisionRecord, now: number): Chip {
 }
 
 /**
- * A shedding mark is its pin's key, `key/session/agent/model`. The session's prefix and the agent tell a round's marks
- * apart.
+ * A pin key's session and agent where its text has one reading: four parts, none empty. A key id holds no `/`, but a
+ * session id, an agent id and a model can, so any other split leaves the session unknown.
  */
-export function markChip(text: string): Chip {
-  const [, session = '', agent = ''] = text.split('/');
-  return { ...(session ? { href: entityHref('session', session) } : {}), label: 'mark', mono: true, title: text, value: agent ? `${session.slice(0, 8)}/${agent}` : session.slice(0, 8) };
+function pinKeyParts(text: string): { agentId: string; sessionId: string } | null {
+  const parts = text.split('/');
+  return parts.length === 4 && !parts.includes('') ? { agentId: parts[2], sessionId: parts[1] } : null;
+}
+
+/** A pin key with no one reading, whole behind its key id, so its chip names no session the text does not fix. */
+const behindKeyId = (text: string): string => text.slice(text.indexOf('/') + 1);
+
+/**
+ * A shedding mark is its pin's key, `key/session/agent/model`. The session's prefix and the agent tell a round's marks
+ * apart. `member` is the record's own entry for the mark, which names the session whole.
+ */
+export function markChip(text: string, member: { agentId: string; sessionId: string } | null): Chip {
+  const pin = member ?? pinKeyParts(text);
+  if (pin === null) return { label: 'mark', mono: true, title: text, value: behindKeyId(text) };
+  return { href: entityHref('session', pin.sessionId), label: 'mark', mono: true, title: text, value: `${pin.sessionId.slice(0, 8)}/${pin.agentId}` };
 }
 
 /**
  * A pin a round passed over: its session and why, `session: reason`. The engine writes it as the pin's key,
- * `key/session/agent/model`, then the reason.
+ * `key/session/agent/model`, then the reason. A key with no one reading passes no session and `shown` in its place.
  */
-function skipChip(session: string, reason: string, title: string, label?: string): Chip {
-  return { ...(session ? { href: entityHref('session', session) } : {}), ...(label === undefined ? {} : { label }), title, value: `${session.slice(0, 8)}: ${wordOf(LABELS, reason)}` };
+function skipChip(session: string, reason: string, title: string, label?: string, shown = session.slice(0, 8)): Chip {
+  return { ...(session ? { href: entityHref('session', session) } : {}), ...(label === undefined ? {} : { label }), title, value: `${shown}: ${wordOf(LABELS, reason)}` };
 }
 
 /** A drift refusal's client version: the summary's `client` fact carries it, the record's reason the trigger alone. */
@@ -1229,15 +1242,23 @@ export function factChips(f: WalkFact, record: DecisionRecord, now: number): Chi
       if (typeof v === 'string') return laneChips(v);
       break;
     case 'marks':
-      if (Array.isArray(v)) return v.map((m) => markChip(String(m)));
+      if (Array.isArray(v)) {
+        const shed = record.outcome.shedMarks ?? [];
+        return v.map((m) => {
+          const text = String(m);
+          return markChip(text, shed.find((mk) => `${mk.keyId}/${mk.sessionId}/${mk.agentId}/${mk.model}` === text) ?? null);
+        });
+      }
       break;
+    // The record holds no member for a skipped pin, so its text alone names the session.
     case 'skipped':
       if (Array.isArray(v)) {
         return v.map((x) => {
           const text = String(x);
           const at = text.lastIndexOf(': ');
-          const [, session = ''] = (at < 0 ? text : text.slice(0, at)).split('/');
-          return skipChip(session, at < 0 ? '' : text.slice(at + 2), text, 'skipped');
+          const key = at < 0 ? text : text.slice(0, at);
+          const pin = pinKeyParts(key);
+          return skipChip(pin?.sessionId ?? '', at < 0 ? '' : text.slice(at + 2), text, 'skipped', pin === null ? behindKeyId(key) : undefined);
         });
       }
       break;
