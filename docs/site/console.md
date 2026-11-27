@@ -1679,7 +1679,8 @@ sentence on hover, and the line under them reads the mod's lifecycle word for th
 and its deadline or wake time (`parked · background · deadline in 1h 12m`), then the state's sentence with the cause's.
 A finished session, listed under Finished sessions, keeps its lines in their ended state with the TTL, Last request,
 Last probe, Next probe and Probes / credited the engine last read, and its Status reads `finished`. A session without a
-recipe reads "no recipe" and `Nothing is scheduled because {reason}.` inside the details.
+recipe reads "no recipe" and `Nothing is scheduled because {reason}.` inside the details, and so does a session whose
+companion mod holds cache warming off, whatever its lines read.
 
 At a phone's width, under 600 px, the session table scrolls sideways inside its card. An open row's detail stays as wide
 as the card's visible part, its content 12 px in from each side, and keeps to the card's left edge while the table

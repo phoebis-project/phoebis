@@ -25921,13 +25921,15 @@ await forView('/sessions', async () => {
   });
 });
 await forView('/sessions', async () => {
-  // Without the pools a session's missing recipe has no cause the page can name but the read that failed.
+  // Without the pools a session's missing recipe has no cause the page can name but the read that failed, beside the
+  // reasons a row carries of its own: an earlier holder of its key id, and the session's own option where the row's
+  // cause names it, as the story's opted-out session's does.
   failNextCall('listPools', '/admin/pools', 'store locked');
   const page = await mount('/sessions');
   [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
   await page.settle(300);
   const causes = [...page.container.querySelectorAll('.agents__none > span:not(.badge)')].map((s) => s.textContent?.trim() ?? '');
-  const live = causes.filter((c) => !c.includes('created again'));
+  const live = causes.filter((c) => !c.includes('created again') && c !== "Nothing is scheduled because cache warming is off in the session's companion mod.");
   results.push({
     name: '/sessions a failed pools read names the pool list as the missing recipe\'s cause',
     ok: live.length > 0 && live.every((c) => c === 'Nothing is scheduled because the pool list did not load.'),
@@ -25936,14 +25938,14 @@ await forView('/sessions', async () => {
   page.unmount();
 });
 await forView('/sessions', async () => {
-  // A session registered with the cache warming off holds a row and no line until its first request, so its row's
-  // cause is all that names the reason. The story's registered row stands in for it, its cause set and its lines taken
-  // away, so the story's figures stay as they are.
+  // A failed pools read hides the pool's reason, but the row's own cause still names the session's option. The story's
+  // registered row stands in for such a session, its cause set and its lines taken away.
   const REGISTERED_ID = '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43';
   const { listKeepaliveRecipes, listSessions } = api;
   api.listSessions = async (...args) => (await listSessions.apply(api, args)).map((s) => (s.sessionId === REGISTERED_ID ? { ...s, agentContexts: [], keepalive: { ...s.keepalive, cause: 'session_opted_out' } } : s));
   api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => r.sessionId !== REGISTERED_ID);
   const registered = (await api.listSessions()).find((s) => !s.historical && s.sessionId === REGISTERED_ID);
+  failNextCall('listPools', '/admin/pools', 'store locked');
   const page = await mount('/sessions');
   const tr = registered === undefined ? null : page.container.querySelector(`[id="${sessionRowId(registered)}"]`);
   tr?.click();
@@ -25954,9 +25956,39 @@ await forView('/sessions', async () => {
   api.listSessions = listSessions;
   api.listKeepaliveRecipes = listKeepaliveRecipes;
   results.push({
-    name: "/sessions a session whose own option holds the cache warming off and that has no line names that option as its missing recipe's cause",
+    name: "/sessions a failed pools read names a session's own option, not the pool list, where the row's cause reads it",
     ok: none === "Nothing is scheduled because cache warming is off in the session's companion mod.",
     missing: [none ?? 'no missing recipe sentence on the registered row'],
+  });
+});
+await forView('/sessions', async () => {
+  // The router answers the session's own option on its row whatever its lines read, and an agent that held nothing to
+  // drop when the option went off keeps an earlier refusal's cause. The story's registered row stands in for such a
+  // session on a pool that keeps caches warm and a key that permits the warming: its cause set, a cold pin so that the
+  // Cache cell reads a recipe word, and one record of main under `unsupported_shape`, so the story's figures stay as
+  // they are.
+  const REGISTERED_ID = '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43';
+  const { listKeepaliveRecipes, listSessions } = api;
+  api.listSessions = async (...args) => (await listSessions.apply(api, args)).map((s) => (s.sessionId === REGISTERED_ID ? { ...s, agentContexts: [], keepalive: { ...s.keepalive, cause: 'session_opted_out' }, warm: false } : s));
+  api.listKeepaliveRecipes = async (...args) => {
+    const recipes = (await listKeepaliveRecipes.apply(api, args)).filter((r) => r.sessionId !== REGISTERED_ID);
+    return [...recipes, { ...recipes[0], accountId: null, agentId: 'main', agentState: 'busy', cause: 'unsupported_shape', keyId: 'laptop', nextProbeAt: null, poolId: 'all', sessionId: REGISTERED_ID, state: 'not_retained' }];
+  };
+  const registered = (await api.listSessions()).find((s) => !s.historical && s.sessionId === REGISTERED_ID);
+  const page = await mount('/sessions');
+  const tr = registered === undefined ? null : page.container.querySelector(`[id="${sessionRowId(registered)}"]`);
+  const cache = sessionCell(page, tr, 'Cache')?.querySelector('.sub')?.textContent?.trim() ?? null;
+  tr?.click();
+  await page.settle(150);
+  const detail = tr?.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+  const none = detail?.querySelector('.agents__none > span:not(.badge)')?.textContent?.trim() ?? null;
+  page.unmount();
+  api.listSessions = listSessions;
+  api.listKeepaliveRecipes = listKeepaliveRecipes;
+  results.push({
+    name: "/sessions a session whose own option holds the cache warming off reads no recipe and names that option over a line of another cause",
+    ok: cache === 'no recipe' && none === "Nothing is scheduled because cache warming is off in the session's companion mod.",
+    missing: [cache ?? 'no Cache cell word on the registered row', none ?? 'no missing recipe sentence on the registered row'],
   });
 });
 await forView('/sessions', async () => {
@@ -29524,11 +29556,12 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
   {
-    // The 27 rows the default filters keep at the story's instant, fourteen of them warmed by no recipe: ten pinned
+    // The 27 rows the default filters keep at the story's instant, fifteen of them warmed by no recipe: eleven pinned
     // rows read `no recipe` under their Cache badge, the written fleet session no mod reports, the workshop session,
-    // whose pool keeps no cache warm, the silent row past its idle limit and laptop's c52dbc8e, whose session no mod
-    // reports, among them, and four with no pin read `no pin`, the registration-only row and laptop's 4ef130f1 among
-    // them. The written auxiliary-only session, whose main holds none, reads its subagent's recipe.
+    // whose pool keeps no cache warm, the silent row past its idle limit, laptop's c52dbc8e, whose session no mod
+    // reports, and 0d588de5, whose own option holds the warming off (its `sessionSpec` row in mock/operations.ts),
+    // among them, and four with no pin read `no pin`, the registration-only row and laptop's 4ef130f1 among them. The
+    // written auxiliary-only session, whose main holds none, reads its subagent's recipe.
     const pinned = await mount('/sessions', { now: CLOCK_ORIGIN });
     const drawn = [...pinned.container.querySelectorAll('tbody tr.srow')];
     const words = drawn.map((tr) => {
@@ -29537,7 +29570,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
     pinned.unmount();
     const count = (word) => words.filter((w) => w === word).length;
-    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 27 && count('no recipe') === 10 && count('no pin') === 4, missing: [`${drawn.length} rows, ${count('no recipe')} with no recipe, ${count('no pin')} with no pin`] });
+    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 27 && count('no recipe') === 11 && count('no pin') === 4, missing: [`${drawn.length} rows, ${count('no recipe')} with no recipe, ${count('no pin')} with no pin`] });
   }
   // The sessions the mod released whole are finished, so these read with the finished sessions shown.
   await m.navigate('/sessions?finished=1');

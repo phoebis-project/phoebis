@@ -98,6 +98,7 @@ const STATE_HINT: Record<RecipeState, string> = {
 const NO_RECIPE_HINT = 'Nothing probes this session, so its prompt cache expires on its own schedule.';
 const HISTORICAL_HINT = 'A holder of this key id that no longer exists. The ledger keeps its sessions until they expire';
 const HISTORICAL_CAUSE = 'this key id was created again and the session belongs to the earlier holder';
+const OPTED_OUT_CAUSE = "cache warming is off in the session's companion mod";
 const KIND_HINT: Record<Account['kind'], string> = {
   api_key: 'API-key account: billed per token, no quota windows',
   oauth: 'Subscription account: quota windows apply',
@@ -209,7 +210,8 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
 
 /**
  * `poolsFailed`: the pool list did not load, so a session whose pool is not found has no cause the rows can name but
- * that. `sort` and `dir`: the sort control's key and direction, which order the rows and each row's lines.
+ * that, or its own option where the row's cause names it. `sort` and `dir`: the sort control's key and direction, which
+ * order the rows and each row's lines.
  */
 function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, sort: SessionsAddress['sort'], dir: SortDir, limits: ListingLimits | null): Row[] {
   const keyById = new Map(keys.map((k) => [k.id, k]));
@@ -222,16 +224,20 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
     // Every agent ended at the idle limit means the retained prompts are already
     // gone, so the session reads as having no recipe even though the rows remain.
     const idleLimitOnly = agents.length > 0 && agents.every((a) => a.cause === 'idle_limit');
+    // The router answers this cause wherever the session's own option holds the warming off, and no agent of such a
+    // session keeps a prompt, so it reads as having no recipe too, whatever its lines' causes say.
+    const optedOut = session.keepalive.cause === 'session_opted_out';
+    const recipeless = agents.length === 0 || idleLimitOnly || optedOut;
     const causes: string[] = [];
     let idleLimit: Row['idleLimit'] = null;
     // The live key's pool and permissions say nothing about a session that no longer belongs to it, so an earlier
     // holder carries that reason alone.
     if (session.historical) causes.push(HISTORICAL_CAUSE);
-    else if (poolsFailed && key !== null && pool === null) causes.push('the pool list did not load');
+    else if (poolsFailed && key !== null && pool === null) causes.push(optedOut ? OPTED_OUT_CAUSE : 'the pool list did not load');
     else {
       if (pool && !pool.keepalive.enabled) causes.push(`pool ${pool.name} keeps no caches warm`);
       if (key && !key.companionPermissions.includes('keepalive')) causes.push(`key ${key.name} permits no cache warming`);
-      if (session.keepalive.cause === 'session_opted_out') causes.push("cache warming is off in the session's companion mod");
+      if (optedOut) causes.push(OPTED_OUT_CAUSE);
       if (idleLimitOnly) idleLimit = { ranOutAt: idleLimitRanOutAt(session, pool) };
       else if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     }
@@ -246,10 +252,10 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
       finished,
       idleLimit,
       lines: orderLines(lines, sort, dir),
-      noRecipe: agents.length === 0 || idleLimitOnly ? causes : null,
+      noRecipe: recipeless ? causes : null,
       pool,
       poolId: key?.poolId ?? null,
-      recipe: agents.length === 0 || idleLimitOnly ? null : rowRecipe(agents),
+      recipe: recipeless ? null : rowRecipe(agents),
       session,
       split: lifecycleSplit(lines),
       status: statusOf(session, finished),
