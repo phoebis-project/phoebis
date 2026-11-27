@@ -65,7 +65,8 @@ jobs:
               || { echo "release tag '$TAG' is not X.Y.Z or X.Y.Z-suffix"; exit 1; }
             [ "$TAG" = "$version" ] \
               || { echo "release tag '$TAG' differs from the workspace version '$version' in Cargo.toml"; exit 1; }
-            grep -Eq "^## ${TAG//./\\.}( |\$)" docs/site/changelog.md \
+            awk -v heading="## $TAG" '$0 == heading || index($0, heading " ") == 1 { found = 1 } END { exit !found }' \
+              docs/site/changelog.md \
               || { echo "docs/site/changelog.md has no '## $TAG' section for this release"; exit 1; }
             {
               echo "exporter=type=image,push-by-digest=true,name-canonical=true,push=true"
@@ -131,7 +132,7 @@ jobs:
       - if: matrix.slug == 'linux-arm64'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          IMAGE: ${{ needs.guard.outputs.registry_image }}
+          IMAGE: ${{ needs.guard.outputs.image }}
           PUSH: ${{ needs.guard.outputs.push }}
           VERSION: ${{ needs.guard.outputs.version }}
         run: |
@@ -139,7 +140,7 @@ jobs:
             ref="$IMAGE@$DIGEST"
           else
             docker load -i /tmp/phoebis.tar
-            ref=phoebis:smoke
+            ref="$IMAGE"
           fi
           printed=$(docker run --rm "$ref" --version)
           [ "$printed" = "phoebis $VERSION" ] \
@@ -266,7 +267,7 @@ jobs:
           path: ${{ runner.temp }}
       - id: image
         env:
-          IMAGE: ${{ needs.guard.outputs.registry_image }}
+          IMAGE: ${{ needs.guard.outputs.image }}
           PUSH: ${{ needs.guard.outputs.push }}
         run: |
           if [ "$PUSH" = true ]; then
@@ -274,7 +275,7 @@ jobs:
             docker pull "$ref"
           else
             docker load -i "$RUNNER_TEMP/phoebis.tar"
-            ref=phoebis:smoke
+            ref="$IMAGE"
           fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
       - env:
