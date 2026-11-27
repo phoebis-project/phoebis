@@ -100,8 +100,9 @@ the router still pins and whose requests it still sees. The router reads the ins
 on every model request of its process, `X-Phoebis-Instance-Id`, to tell that process's requests from another process's
 on the same session id. While the holder's lease is live, a request that names another instance leaves the session's
 recipes as they were. The router strips the header before a request leaves. Once the holder's lease has lapsed, a real
-request that names another instance arms its recipe as the holder's does. A registration starts main `busy` under the
-cause `awaiting_request` until its first request.
+request that names another instance arms its recipe as the holder's does. A registration starts main under the lifecycle
+word `registered`, which stands for a busy main with no real request of it at the router since the registration
+([Sessions](console.md#sessions)).
 
 ## Turning it on
 
