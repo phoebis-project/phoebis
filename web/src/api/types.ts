@@ -2170,7 +2170,8 @@ export interface AgentContext extends BurnFigures, MoveFigures {
   fast: boolean;
   lastInputTokens: number | null;
   lastUsedAt: string | null;
-  /** The agent's lifecycle word from the keepalive engine's record, null where no mod reports it. */
+  /** The agent's lifecycle word read off the session engine's state and the cache warming's cause, null where no mod
+   *  reports it. */
   lifecycle: Lifecycle | null;
   model: string;
   /** The instant the pin was written on the account it stands on. */
@@ -2331,8 +2332,8 @@ export interface Session extends BurnFigures, MoveFigures {
   /** A session known from the ledger or from a registration alone carries no activity of its own, so the last ledgered
    *  request stands in for it. */
   lastUsedAt: string | null;
-  /** Main's lifecycle word from the keepalive engine's record, whether or not a recipe stands, null where no mod
-   *  reports the session. */
+  /** Main's lifecycle word read off the session engine's state and the cache warming's cause, whether or not a recipe
+   *  stands, null where no mod reports the session. */
   lifecycle: Lifecycle | null;
   /** The pin's open shedding mark: when the round set it, the account it stands on and the window whose trigger set
    *  it. Null where the pin holds none and on a row with no pin. */

@@ -28999,9 +28999,10 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // The earlier agents line stands under the table, closed, over the agents with seed rows and no line: d41e on the
     // finished session 9b4e2f71 (its one row billed $0.0202 in fast mode) and story 4's Explore subagent 0b7f (its one
     // row billed $0.0055 in overage). Opened, each joins the table as a row of its own off its newest row, its model
-    // with a dash under it, dashes for the pin's facts, no pin in Status. Story 4's companion reported a name and a
-    // type of 0b7f's own (`sessionSpec[4]` in mock/operations.ts) and none of d41e, so the hover reads 0b7f by its name
-    // with its id and d41e by its id alone, and 0b7f's row reads that name over its id and the reported type.
+    // with a dash under it, dashes for the pin's facts, no pin in Status. Story 4's stored facts give 0b7f a name and
+    // a type of its own (`sessionSpec[4]` in mock/operations.ts), and the finished session's give d41e none, so the
+    // hover reads 0b7f by its name with its id and d41e by its id alone, and 0b7f's row reads that name over its id and
+    // the reported type.
     const read = {};
     for (const [key, query, agent] of [
       ['finished', '?finished=1', 'd41e'],

@@ -863,9 +863,9 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const parkKind = agentState !== 'parked' ? null : cause === 'horizon' ? 'scheduled' : 'background';
     const deadline = agentState === 'parked' && j === 0 && cause !== 'horizon' ? ahead(72 * MINUTE + 30_000) : null;
     const wakeAt = parkKind === 'scheduled' ? ahead(3 * 24 * 60 * MINUTE + 30_000) : null;
-    // An agent whose request still awaits its evidence has not been probed since, the engine probes no agent whose
-    // session holds the cache warming off, a probe in flight was dispatched at its due time, which the engine records
-    // as the last probe, and the rest were probed minutes ago.
+    // An agent whose request still awaits its evidence has not been probed since. The engine probes no agent whose
+    // session holds the cache warming off. A probe in flight was dispatched at its due time, which the engine records
+    // as the last probe. The rest were probed minutes ago.
     const writtenProbe = fixedAgents?.[j].lastProbeMinutes;
     const lastProbeAt = writtenProbe !== undefined ? ago(writtenProbe * MINUTE) : cause === 'awaiting_cache_evidence' || cause === 'session_opted_out' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
@@ -1651,9 +1651,9 @@ export const poolPinsAt = (now: number, sessions: readonly Session[], keyIds: Re
     .flatMap((s) =>
       [...s.agentContexts, ...(UNLISTED_PINS.get(s) ?? [])].flatMap((line): PoolPin[] => {
         const recipe = recipes.get(pinKeyFor(s.keyId, s.sessionId, line.agentId, line.model));
-        // A recipe dates its agent's pin by the later of its last request and its last probe. A main whose recipe
-        // holds no last probe has no probe to renew its pin, so its pin is dated as the sessions route dates its line,
-        // by the row's last use, which stands for a request of the agent that the story's sample of requests can lack.
+        // A main whose recipe holds no last probe has no probe to renew its pin, so its pin is dated as the sessions
+        // route dates its line, by the row's last use, which stands for a request of the agent that the story's sample
+        // of requests can lack.
         const unprobedMain = recipe !== undefined && line.agentId === 'main' && recipe.lastProbeAt === null;
         const lastUse = recipe !== undefined && !unprobedMain ? recipeLastUse(recipe) : line.lastUsedAt === null ? null : Date.parse(line.lastUsedAt);
         if (lastUse === null || pinReadAt(lastUse, ttlMs, now) === 'none') return [];

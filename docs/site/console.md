@@ -142,16 +142,16 @@ of 2 resets ends in 4 days` where several end within those days, and `ends today
 account's card on the [Quota](#quota) view. A wall on an account that holds a reset usable now for a window at its limit
 adds `, a reset can clear it` after its own words and opens that card in place of the routing log. Both point at the
 card's "Use reset", and the Dashboard uses no reset. Four items of the session engine and the cache warming open the
-[Sessions](#sessions) view: `Keepalive bus gaps: {n} since the start` in the serious tone while the engine missed bus
-events in the last 24 hours, `Session engine cap at {pct}: {cap}` in the warning tone while one of the session engine's
-caps (sessions or agent records) stands at 90 percent of its max or more, `Keepalive cap at {pct}: retained prompts` in
-the warning tone while the retained prompts stand at 90 percent of their max or more, and `Expired between turns: {n} in
-24h` in the warning tone while prompt caches of agents that the keepalive still held expired between turns on a pool
-whose keepalive policy is on, under a key the keepalive may probe for. A parked ledger record adds "Replay parked
-records", which answers `Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge
-and that button with its answer together, the button and its answer take a second row. The line also reads again when
-the window regains focus, and a tick or a focus that finds its previous read still out is skipped, so a slow read lands
-and the next tick reads again.
+[Sessions](#sessions) view: `Keepalive bus gaps: {n} since the start` in the serious tone while the keepalive subscriber
+missed bus events in the last 24 hours, `Session engine cap at {pct}: {cap}` in the warning tone while one of the
+session engine's caps (sessions or agent records) stands at 90 percent of its max or more, `Keepalive cap at {pct}:
+retained prompts` in the warning tone while the retained prompts stand at 90 percent of their max or more, and `Expired
+between turns: {n} in 24h` in the warning tone while prompt caches of agents that the keepalive still held expired
+between turns on a pool whose keepalive policy is on, under a key the keepalive may probe for. A parked ledger record
+adds "Replay parked records", which answers `Landed {n}, {n} still parked`. Where the line is too narrow for its lead,
+the "+N more" badge and that button with its answer together, the button and its answer take a second row. The line also
+reads again when the window regains focus, and a tick or a focus that finds its previous read still out is skipped, so a
+slow read lands and the next tick reads again.
 
 Five tiles follow, each reading the 24 whole hours before the current hour and the current hour so far, which its
 sparkline draws as the last point, and a note per hour under a tile reads over the hours covered: "Requests, 24h" with
