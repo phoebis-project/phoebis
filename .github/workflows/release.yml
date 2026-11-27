@@ -126,6 +126,24 @@ jobs:
           provenance: ${{ needs.guard.outputs.push == 'true' && 'mode=max' || 'false' }}
           sbom: ${{ needs.guard.outputs.push == 'true' }}
           tags: ${{ needs.guard.outputs.image }}
+      # The smoke job starts the amd64 image alone. This step starts the arm64 image on its own runner, so an image
+      # that cannot start there fails the run before the publish job tags it.
+      - if: matrix.slug == 'linux-arm64'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ needs.guard.outputs.registry_image }}
+          PUSH: ${{ needs.guard.outputs.push }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          if [ "$PUSH" = true ]; then
+            ref="$IMAGE@$DIGEST"
+          else
+            docker load -i /tmp/phoebis.tar
+            ref=phoebis:smoke
+          fi
+          printed=$(docker run --rm "$ref" --version)
+          [ "$printed" = "phoebis $VERSION" ] \
+            || { echo "--version printed '$printed', not 'phoebis $VERSION'"; exit 1; }
       - if: needs.guard.outputs.push == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
