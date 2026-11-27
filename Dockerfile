@@ -43,8 +43,8 @@ RUN cd web && npm ci --no-audit --no-fund && npm run build
 RUN PHOEBIS_SKIP_UI_BUILD=1 cargo build --release --locked --package phoebis-router \
  && install -d -o 65532 -g 65532 -m 0700 /var/lib/phoebis
 
-# gcr.io/distroless/cc-debian13:nonroot, resolved 2026-09-22
-FROM gcr.io/distroless/cc-debian13@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97
+# gcr.io/distroless/cc-debian13:nonroot, resolved 2026-11-27
+FROM gcr.io/distroless/cc-debian13@sha256:29ee70762214fe8190cea04ef1c0a84a8365879e047ce8f911ae5a5ab2355fa2
 COPY --from=builder /src/target/release/phoebis /usr/local/bin/phoebis
 COPY --from=builder /src/LICENSE /usr/share/doc/phoebis/LICENSE
 COPY --from=builder --chown=65532:65532 --chmod=0700 /var/lib/phoebis /var/lib/phoebis
