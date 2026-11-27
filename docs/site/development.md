@@ -604,7 +604,7 @@ release build with the next dry run or release, and `Tests` covers it until then
    it for a release with no moved pin too. Then create the release on GitHub with the tag `X.Y.Z`, no `v` prefix, at the
    commit that the dry run proved, with the version as its title and a link to the changelog page in its notes. Create
    the release of a version with a suffix as a prerelease. Publishing it starts the workflow.
-4. The workflow's guard refuses the release before anything builds when the tag has another shape
+4. The workflow's guard refuses the release before anything builds when the tag has another form
    (`release tag '{TAG}' is not X.Y.Z or X.Y.Z-suffix`), differs from the workspace version
    (`release tag '{TAG}' differs from the workspace version '{version}' in Cargo.toml`), or has no section in the
    changelog (`docs/site/changelog.md has no '## {TAG}' section for this release`). Otherwise it builds `linux/amd64`
@@ -622,8 +622,8 @@ release build with the next dry run or release, and `Tests` covers it until then
    static link check, an embedded bundle, `init --non-interactive` and `check-config` in a temporary directory) and
    packs it with the license as `phoebis-{VERSION}-{TARGET}.tar.gz`. The `cross` images install clang, cmake and
    libclang without tzdata's time zone prompt, so the build runs through rather than waiting for an answer. Once every
-   smoke passes it publishes one manifest list at `ghcr.io/phoebis-project/phoebis` under `X.Y.Z`, `X.Y` and `X` (from
-   major 1, never for a prerelease), `latest` (never for a prerelease), and `sha-<short sha>`, checks that the list
+   smoke passes it publishes one manifest list at `ghcr.io/phoebis-project/phoebis` under `X.Y.Z`, `X.Y`, `X` (from
+   major 1), `latest` and `sha-<short sha>`, with none of `X.Y`, `X` and `latest` for a prerelease, checks that the list
    holds amd64 and arm64, and uploads the two archives with `SHA256SUMS` to the release. The Dockerfile pins the image's
    node stage and its runtime base by digest, each with its tag and the day it was resolved in the comment above its
    `FROM` line.
