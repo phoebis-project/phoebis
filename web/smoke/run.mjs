@@ -25936,6 +25936,30 @@ await forView('/sessions', async () => {
   page.unmount();
 });
 await forView('/sessions', async () => {
+  // A session registered with the cache warming off holds a row and no line until its first request, so its row's
+  // cause is all that names the reason. The story's registered row stands in for it, its cause set and its lines taken
+  // away, so the story's figures stay as they are.
+  const REGISTERED_ID = '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43';
+  const { listKeepaliveRecipes, listSessions } = api;
+  api.listSessions = async (...args) => (await listSessions.apply(api, args)).map((s) => (s.sessionId === REGISTERED_ID ? { ...s, agentContexts: [], keepalive: { ...s.keepalive, cause: 'session_opted_out' } } : s));
+  api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => r.sessionId !== REGISTERED_ID);
+  const registered = (await api.listSessions()).find((s) => !s.historical && s.sessionId === REGISTERED_ID);
+  const page = await mount('/sessions');
+  const tr = registered === undefined ? null : page.container.querySelector(`[id="${sessionRowId(registered)}"]`);
+  tr?.click();
+  await page.settle(150);
+  const detail = tr?.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+  const none = detail?.querySelector('.agents__none > span:not(.badge)')?.textContent?.trim() ?? null;
+  page.unmount();
+  api.listSessions = listSessions;
+  api.listKeepaliveRecipes = listKeepaliveRecipes;
+  results.push({
+    name: "/sessions a session whose own option holds the cache warming off and that has no line names that option as its missing recipe's cause",
+    ok: none === "Nothing is scheduled because cache warming is off in the session's companion mod.",
+    missing: [none ?? 'no missing recipe sentence on the registered row'],
+  });
+});
+await forView('/sessions', async () => {
   // A failed accounts read leaves every account cell bare, so one line under the bar says why.
   failNextCall('listAccounts', '/admin/accounts', 'registry locked');
   const page = await mount('/sessions');

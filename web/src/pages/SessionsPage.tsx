@@ -231,6 +231,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
     else {
       if (pool && !pool.keepalive.enabled) causes.push(`pool ${pool.name} keeps no caches warm`);
       if (key && !key.companionPermissions.includes('keepalive')) causes.push(`key ${key.name} permits no cache warming`);
+      if (session.keepalive.cause === 'session_opted_out') causes.push("cache warming is off in the session's companion mod");
       if (idleLimitOnly) idleLimit = { ranOutAt: idleLimitRanOutAt(session, pool) };
       else if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     }

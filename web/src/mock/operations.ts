@@ -557,7 +557,7 @@ const datedLines = (firstSeen: string | null, session: string, lines: readonly U
   });
 };
 /** The summary of a row main holds no recipe for. */
-const noRecipe = (): Session['keepalive'] => ({ nextProbeAt: null });
+const noRecipe = (): Session['keepalive'] => ({ cause: null, nextProbeAt: null });
 /** A pin no round marked, and a row with no pin. */
 const NO_MARK: Pick<Session, 'mark'> = { mark: null };
 /** A session whose companion reports no fact of it, or that no companion reports. */
@@ -714,6 +714,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
           : null,
     keepalive: {
       // Filled in from the recipes below, so a row and its agents cannot disagree.
+      cause: null,
       nextProbeAt: null,
     },
     // Set from the row's index rather than drawn, so the rows after this one keep their rolls: a reporting mod saw the
@@ -955,14 +956,25 @@ function movedPinOf(r: Pick<KeepaliveRecipe, 'agentId' | 'cause' | 'keyId' | 'mo
 }
 
 /**
+ * The states of a line whose prompt the engine keeps. An ended line's recipe was discarded, and a not retained line's
+ * request was never kept.
+ */
+const KEPT_STATES: ReadonlySet<RecipeState> = new Set<RecipeState>(['held', 'paused', 'retained']);
+
+/**
  * A session's summary as the admin route reads it off the session's recipes. Its next probe is the soonest its agents
  * have scheduled: an agent awaiting cache evidence contributes no time even though it is armed, so a session left with
- * only those reads as pending rather than unscheduled.
+ * only those reads as pending rather than unscheduled. Its cause is that of the recipe standing for the session: main's
+ * where main keeps a prompt, else the one with the newest real request among the agents that keep one. A session whose
+ * own option holds the cache warming off keeps none and reads `session_opted_out`, the cause the story gives its lines.
  */
 const summaryOf = (sessionId: string): Session['keepalive'] => {
   const own = RECIPES.filter((r) => r.sessionId === sessionId);
   const scheduled = own.flatMap((r) => (r.nextProbeAt === null ? [] : [r.nextProbeAt])).sort();
-  return { nextProbeAt: scheduled[0] ?? null };
+  const kept = own.filter((r) => KEPT_STATES.has(r.state));
+  const standing = kept.find((r) => r.agentId === 'main') ?? kept.reduce<KeepaliveRecipe | undefined>((newest, r) => (newest === undefined || (r.lastRequestAt ?? '') > (newest.lastRequestAt ?? '') ? r : newest), undefined);
+  const optedOut = own.some((r) => r.cause === 'session_opted_out');
+  return { cause: optedOut ? 'session_opted_out' : (standing?.cause ?? null), nextProbeAt: scheduled[0] ?? null };
 };
 
 for (const pin of SESSIONS) {
