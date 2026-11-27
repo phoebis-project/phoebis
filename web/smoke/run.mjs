@@ -25922,18 +25922,27 @@ await forView('/sessions', async () => {
 });
 await forView('/sessions', async () => {
   // Without the pools a session's missing recipe has no cause the page can name but the read that failed, beside the
-  // reasons a row carries of its own: an earlier holder of its key id, and the session's own option where the row's
-  // cause names it, as the story's opted-out session's does.
+  // reasons a row carries of its own: an earlier holder of its key id keeps its own sentence, and a row whose session's
+  // cause reads its own option names that option, as the story's opted-out session's does. Each sentence is held to
+  // the session of the row that draws it, so the option's sentence on a row whose cause does not read it fails.
+  const listed = await api.listSessions();
   failNextCall('listPools', '/admin/pools', 'store locked');
   const page = await mount('/sessions');
   [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
   await page.settle(300);
-  const causes = [...page.container.querySelectorAll('.agents__none > span:not(.badge)')].map((s) => s.textContent?.trim() ?? '');
-  const live = causes.filter((c) => !c.includes('created again') && c !== "Nothing is scheduled because cache warming is off in the session's companion mod.");
+  const POOLS = 'Nothing is scheduled because the pool list did not load.';
+  const OPTED_OUT = "Nothing is scheduled because cache warming is off in the session's companion mod.";
+  const read = [...page.container.querySelectorAll('.sessions-table tbody tr.srow')].flatMap((tr) => {
+    const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+    const sentence = detail?.querySelector('.agents__none > span:not(.badge)')?.textContent?.trim();
+    return sentence === undefined ? [] : [{ id: tr.id, sentence, session: sessionOfRow(tr, listed) }];
+  });
+  const off = read.filter(({ sentence, session: s }) => s === undefined || (s.historical ? !sentence.includes('created again') : sentence !== (s.keepalive.cause === 'session_opted_out' ? OPTED_OUT : POOLS)));
+  const pooled = read.filter(({ session: s }) => s !== undefined && !s.historical && s.keepalive.cause !== 'session_opted_out');
   results.push({
     name: '/sessions a failed pools read names the pool list as the missing recipe\'s cause',
-    ok: live.length > 0 && live.every((c) => c === 'Nothing is scheduled because the pool list did not load.'),
-    missing: [...new Set(causes)],
+    ok: pooled.length > 0 && off.length === 0,
+    missing: off.length > 0 ? off.map((r) => `${r.id}: ${r.sentence}`) : ['no row reads the pool list'],
   });
   page.unmount();
 });
@@ -25964,9 +25973,10 @@ await forView('/sessions', async () => {
 await forView('/sessions', async () => {
   // The router answers the session's own option on its row whatever its lines read, and an agent that held nothing to
   // drop when the option went off keeps an earlier refusal's cause. The story's registered row stands in for such a
-  // session on a pool that keeps caches warm and a key that permits the warming: its cause set, a cold pin so that the
-  // Cache cell reads a recipe word, and one record of main under `unsupported_shape`, so the story's figures stay as
-  // they are.
+  // session on a pool that keeps caches warm and a key that permits the warming: its cause set, its lines taken away
+  // but one record of main under `unsupported_shape`, and a warmth of its own, so that the Cache cell draws its recipe
+  // word where it would else read `no pin`. The row is else the registered one, so the story's figures stay as they
+  // are.
   const REGISTERED_ID = '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43';
   const { listKeepaliveRecipes, listSessions } = api;
   api.listSessions = async (...args) => (await listSessions.apply(api, args)).map((s) => (s.sessionId === REGISTERED_ID ? { ...s, agentContexts: [], keepalive: { ...s.keepalive, cause: 'session_opted_out' }, warm: false } : s));
