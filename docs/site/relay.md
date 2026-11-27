@@ -475,8 +475,6 @@ handler as the client's own, as a probe, to keep its prompt cache warm ([Turning
 probe costs a cache read ([How a probe works](keepalive.md#how-a-probe-works)) and is the one request of this list with
 a switch.
 
-<a id="the-keepalive-protocol"></a>
-
 ## The companion protocol
 
 The companion mod reports to one route, `POST /v0/companion/events` on the proxy listener, with `Authorization: Bearer
