@@ -588,14 +588,23 @@ on a published release, on a manual dispatch, and on a pull request that touches
 `web/.nvmrc`, `web/package-lock.json` and `web/package.json`). It runs on no push, so a change to another file gets its
 release build with the next dry run or release, and `Tests` covers it until then. To release:
 
-1. Resolve the Dockerfile's two pinned digests again: the node stage's and the runtime base's, each under the tag its
-   comment names. `docker buildx imagetools inspect <tag>` prints the tag's current digest. Where one moved, write the
-   new digest into the `FROM` line and the day into the comment above it, and run the manual dispatch below as a dry run
-   on that change before it merges. A base update reaches a published image with the next release and no earlier, and a
-   version tag stays on the one build its release made.
-2. Set `[workspace.package].version` in `Cargo.toml` to the version (`X.Y.Z`, or `X.Y.Z-rc.1` for a prerelease), head
-   the changelog's section for it `## X.Y.Z`, and merge to `main`.
-3. Create the release on GitHub with the tag `X.Y.Z` at that head, no `v` prefix. Publishing it starts the workflow.
+1. Resolve the Dockerfile's two pinned digests again on the day of the release: the node stage's and the runtime base's,
+   each under the tag its comment names. `docker buildx imagetools inspect <tag>` prints the tag's current digest. Where
+   one moved, write the new digest into the `FROM` line and the day into the comment above it, and commit the change to
+   `main`. For a release on a later day than the dry run of step 3, resolve the digests again, and a tag that moved by
+   then takes a new commit and a new dry run. A base update reaches a published image with the next release and no
+   earlier, and a version tag stays on the one build its release made.
+2. Set `[workspace.package].version` in `Cargo.toml` to the version (`X.Y.Z`, or `X.Y.Z-rc.1` for a prerelease), rename
+   the changelog's `## Unreleased` heading to `## X.Y.Z` or write that section where no change opened one, and merge to
+   `main`. The changelog's heading and the release's tag are the version exactly as this step sets it, a suffix
+   included: `## X.Y.Z-rc.1` and the tag `X.Y.Z-rc.1` for a prerelease. A version with a suffix is a prerelease: its
+   image takes none of the tags `X.Y`, `X` and `latest`, and step 3 creates its release as a prerelease. The version
+   change moves `Cargo.lock` too: run `cargo update --workspace` to write it and commit both files, since each build
+   runs with `--locked`.
+3. Run the manual dispatch below as a dry run on the head of `main` once the changes of steps 1 and 2 are on it, and run
+   it for a release with no moved pin too. Then create the release on GitHub with the tag `X.Y.Z`, no `v` prefix, at the
+   commit that the dry run proved, with the version as its title and a link to the changelog page in its notes. Create
+   the release of a version with a suffix as a prerelease. Publishing it starts the workflow.
 4. The workflow's guard refuses the release before anything builds when the tag has another shape
    (`release tag '{TAG}' is not X.Y.Z or X.Y.Z-suffix`), differs from the workspace version
    (`release tag '{TAG}' differs from the workspace version '{version}' in Cargo.toml`), or has no section in the
@@ -621,9 +630,13 @@ release build with the next dry run or release, and `Tests` covers it until then
    `FROM` line.
 
 A failed smoke, of the image or of a binary, or a failed bundle check leaves untagged digests in the registry, no tag
-and no archive on the release. A failed guard leaves nothing. A manual dispatch (Actions, Release, Run workflow) is the
-dry run: it builds both platforms and runs the smoke checks without pushing. Run it after a change to the Dockerfile,
-`Cross.toml` or the workflow, since a pull request builds the amd64 side alone, and before the first release. The
-package inherits the repository's visibility: while the repository is private, pulling needs a token with
-`read:packages`. The image name is derived from the repository that runs the workflow, so a renamed repository publishes
-under its new name without a workflow change.
+and no archive on the release. A failed guard leaves nothing. A release whose run fails for a reason in its commit is
+deleted with its tag and created again at the corrected commit behind a green dry run, as long as the run published no
+image tag and no archive under the version. Once an image tag or an archive is public, the correction ships as the next
+patch version. A manual dispatch (Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the
+smoke checks without pushing. Run it on `main` after a change to one of the image's or the binary's inputs, since a pull
+request builds the amd64 side alone, and ahead of each release. The package inherits the repository's visibility: while
+the repository is private, pulling needs a token with `read:packages`. The image name is derived from the repository
+that runs the workflow, so a renamed repository publishes under its new name without a workflow change. A change that an
+operator sees writes its entry under `## Unreleased`, the first section of the [changelog](changelog.md), and step 2
+renames that heading to the version.
