@@ -611,35 +611,42 @@ release build with the next dry run or release, and `Tests` covers it until then
    missed heading before the release exists. On a release it refuses the release before anything builds when the tag has
    another form (`release tag '{TAG}' is not X.Y.Z or X.Y.Z-suffix`), differs from the workspace version
    (`release tag '{TAG}' differs from the workspace version '{version}' in Cargo.toml`), or has no section in the
-   changelog (`docs/site/changelog.md has no '## {TAG}' section for this release`). Otherwise it builds `linux/amd64`
-   and `linux/arm64` on native runners and pushes each by digest, runs the arm64 image through `--version` on its own
-   runner, and runs the amd64 image through `--version` (which must print `phoebis {VERSION}` for both), `check-config`
-   against `deploy/config.container.yaml`, a container in the compose example's shape that must reach `healthy` within
-   30 seconds with no warning of the store on the data directory, serve the built console (the page from the admin
-   listener is not the placeholder and one of its assets is served) and the API reference page with a document of
-   OpenAPI 3.1.0 holding the admin listener's paths, answer `phoebis status` inside the container with a first line
-   ending in `, ready`, take a `phoebis backup` onto the volume and stop within the 40-second grace period, and a second
-   container under a certificate pair the smoke generates, whose certificate verifies the console over TLS. Beside the
-   images it builds the console and checks its bundle with `scripts/check-build.mjs`, failing before the static binaries
-   build. Then it builds a static binary for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` inside the
-   `cross` tool's images (`cross` 0.2.5, the console embedded as built), runs each on its own platform (`--version`, a
-   static link check, an embedded bundle, `init --non-interactive` and `check-config` in a temporary directory) and
-   packs it with the license as `phoebis-{VERSION}-{TARGET}.tar.gz`. The `cross` images install clang, cmake and
-   libclang without tzdata's time zone prompt, so the build runs through rather than waiting for an answer. Once every
-   smoke passes it publishes one manifest list at `ghcr.io/phoebis-project/phoebis` under `X.Y.Z`, `X.Y`, `X` (from
-   major 1), `latest` and `sha-<short sha>`, with none of `X.Y`, `X` and `latest` for a prerelease, checks that the list
-   holds amd64 and arm64, and uploads the two archives with `SHA256SUMS` to the release. The Dockerfile pins the image's
-   node stage and its runtime base by digest, each with its tag and the day it was resolved in the comment above its
-   `FROM` line.
+   changelog (`docs/site/changelog.md has no '## {TAG}' section for this release`). It refuses a release whose
+   prerelease mark disagrees with its tag too: a tag with a suffix on a release that is not marked as a prerelease
+   (`release tag '{TAG}' has a suffix, and the release is not marked as a prerelease`), and a tag with no suffix on a
+   release that is marked as one (`release tag '{TAG}' has no suffix, and the release is marked as a prerelease`).
+   Otherwise it builds `linux/amd64` and `linux/arm64` on native runners and pushes each by digest, runs the arm64 image
+   through `--version` on its own runner, and runs the amd64 image through `--version` (which must print
+   `phoebis {VERSION}` for both), `check-config` against `deploy/config.container.yaml`, a container in the compose
+   example's shape that must reach `healthy` within 30 seconds with no warning of the store on the data directory, serve
+   the built console (the page from the admin listener is not the placeholder and one of its assets is served) and the
+   API reference page with a document of OpenAPI 3.1.0 holding the admin listener's paths, answer `phoebis status`
+   inside the container with a first line ending in `, ready`, take a `phoebis backup` onto the volume and stop within
+   the 40-second grace period, and a second container under a certificate pair the smoke generates, whose certificate
+   verifies the console over TLS. Beside the images it builds the console and checks its bundle with
+   `scripts/check-build.mjs`, failing before the static binaries build. Then it builds a static binary for
+   `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` inside the `cross` tool's images (`cross` 0.2.5, the
+   console embedded as built), runs each on its own platform (`--version`, a static link check, an embedded bundle,
+   `init --non-interactive` and `check-config` in a temporary directory) and packs it with the license as
+   `phoebis-{VERSION}-{TARGET}.tar.gz`. The `cross` images install clang, cmake and libclang without tzdata's time zone
+   prompt, so the build runs through rather than waiting for an answer. Once every smoke passes it publishes one
+   manifest list at `ghcr.io/phoebis-project/phoebis` under `X.Y.Z`, `X.Y`, `X` (from major 1), `latest` and
+   `sha-<short sha>`, with none of `X.Y`, `X` and `latest` for a prerelease, checks that the list holds amd64 and arm64,
+   and uploads the two archives with `SHA256SUMS` to the release. The Dockerfile pins the image's node stage and its
+   runtime base by digest, each with its tag and the day it was resolved in the comment above its `FROM` line.
 
 A failed smoke, of the image or of a binary, or a failed bundle check leaves untagged digests in the registry, no tag
 and no archive on the release. A failed guard builds nothing and pushes nothing, and on a release the published release
 and its tag exist when the guard fails. A release whose run fails for a reason in its commit is deleted with its tag and
 created again at the corrected commit behind a green dry run, as long as the run published no image tag and no archive
-under the version. Once an image tag or an archive is public, the correction ships as the next patch version. A manual
-dispatch (Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the smoke checks without
-pushing. Run it on `main` after a change to one of the image's or the binary's inputs, since a pull request builds the
-amd64 side alone, and ahead of each release. The package is public, so a pull needs no login, and GitHub does not let a
-public package become private again. The image name is derived from the repository that runs the workflow, so a renamed
-repository publishes under its new name without a workflow change. A change that an operator sees writes its entry under
-`## Unreleased`, the first section of the [changelog](changelog.md), and step 2 renames that heading to the version.
+under the version. Once an image tag or an archive is public, the correction ships as the next patch version. A release
+that the guard refuses for its prerelease mark is deleted with its tag and created again with the right mark at the same
+commit as long as no image tag and no archive of the version is public, since a second run of the workflow reads the
+first event and a changed mark starts no run, and a version with one of them public takes the next patch version. A
+manual dispatch (Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the smoke checks
+without pushing. Run it on `main` after a change to one of the image's or the binary's inputs, since a pull request
+builds the amd64 side alone, and ahead of each release. The package is public, so a pull needs no login, and GitHub does
+not let a public package become private again. The image name is derived from the repository that runs the workflow, so
+a renamed repository publishes under its new name without a workflow change. A change that an operator sees writes its
+entry under `## Unreleased`, the first section of the [changelog](changelog.md), and step 2 renames that heading to the
+version.
