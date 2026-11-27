@@ -583,8 +583,10 @@ holds the rules in full. The deploy job runs only from `main`.
 
 A GitHub release publishes the container image and a static binary per Linux architecture. The `Release` workflow runs
 on a published release, on a manual dispatch, and on a pull request that touches the image's or the binary's inputs
-(`.dockerignore`, the workflow, `Cargo.lock`, `Cargo.toml`, `Cross.toml`, the Dockerfile, the crates, the deploy files,
-`rust-toolchain.toml`, and `web/` outside its `e2e`, `smoke` and `test` directories). To release:
+(`.dockerignore`, the workflow, `Cargo.lock`, `Cargo.toml`, `Cross.toml`, the Dockerfile, each crate's manifest under
+`crates/`, `deploy/config.container.yaml`, `rust-toolchain.toml`, the manifest of `tests/fake_upstream`, and
+`web/.nvmrc`, `web/package-lock.json` and `web/package.json`). It runs on no push, so a change to another file gets its
+release build with the next dry run or release, and `Tests` covers it until then. To release:
 
 1. Resolve the Dockerfile's two pinned digests again: the node stage's and the runtime base's, each under the tag its
    comment names. `docker buildx imagetools inspect <tag>` prints the tag's current digest. Where one moved, write the

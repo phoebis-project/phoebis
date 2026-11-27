@@ -1,7 +1,11 @@
 name: Release
 on:
+  # No push starts this workflow: the image build prints the event that started the run, and a push event holds the
+  # pusher's account address.
   # A pull request that touches the image's or the static binary's inputs builds amd64 without pushing, so a broken
-  # Dockerfile or cross build is caught before a release runs it.
+  # Dockerfile or cross build is caught before a release runs it. The list holds what Tests does not build. A member's
+  # manifest stays in it, since a feature change can pull in C code with no change to Cargo.lock, and a workspace
+  # member outside crates/ adds its own line.
   pull_request:
     paths:
       - .dockerignore
@@ -10,13 +14,13 @@ on:
       - Cargo.toml
       - Cross.toml
       - Dockerfile
-      - crates/**
-      - deploy/**
+      - crates/*/Cargo.toml
+      - deploy/config.container.yaml
       - rust-toolchain.toml
-      - web/**
-      - "!web/e2e/**"
-      - "!web/smoke/**"
-      - "!web/test/**"
+      - tests/fake_upstream/Cargo.toml
+      - web/.nvmrc
+      - web/package-lock.json
+      - web/package.json
   release:
     types: [published]
   # The dry run: every platform is built and smoked, nothing is pushed.
